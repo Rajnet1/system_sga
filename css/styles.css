@@ -1,0 +1,292 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  color: #1f2933;
+  background: #f5f7fa;
+}
+
+body {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* --- Sidebar ------------------------------------------------------------- */
+
+.sidebar {
+  width: 380px;
+  min-width: 340px;
+  max-width: 420px;
+  background: #ffffff;
+  border-right: 1px solid #e4e7eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar__header {
+  padding: 20px 22px 12px;
+  border-bottom: 1px solid #e4e7eb;
+}
+
+.sidebar__header h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.sidebar__subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: #52606d;
+}
+
+.sidebar__footer {
+  padding: 12px 22px;
+  border-top: 1px solid #e4e7eb;
+  font-size: 11px;
+  color: #7b8794;
+  background: #fafbfc;
+}
+
+.sidebar__footer a {
+  color: #4a5568;
+}
+
+/* --- Form ---------------------------------------------------------------- */
+
+.search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 22px;
+  border-bottom: 1px solid #e4e7eb;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field span {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #52606d;
+  font-weight: 600;
+}
+
+.field input {
+  padding: 9px 11px;
+  font-size: 14px;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: #2b6cb0;
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);
+}
+
+.search-form button {
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: #2b6cb0;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.search-form button:hover {
+  background: #2c5282;
+}
+
+.search-form button:disabled {
+  background: #9aa5b1;
+  cursor: not-allowed;
+}
+
+/* --- Status -------------------------------------------------------------- */
+
+.status {
+  padding: 8px 22px;
+  font-size: 13px;
+  color: #52606d;
+  min-height: 18px;
+}
+
+.status.error {
+  color: #c53030;
+}
+
+/* --- Results list -------------------------------------------------------- */
+
+.results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 14px 16px;
+}
+
+.city-card {
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  margin: 8px 0;
+  background: #fff;
+  overflow: hidden;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.city-card:hover {
+  border-color: #cbd2d9;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+}
+
+.city-card.active {
+  border-color: #2b6cb0;
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.15);
+}
+
+.city-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.city-card__name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.city-card__count {
+  font-size: 13px;
+  color: #2b6cb0;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.city-card__breakdown {
+  font-size: 11px;
+  color: #7b8794;
+  margin-top: 2px;
+}
+
+.city-card__body {
+  padding: 4px 14px 12px;
+  border-top: 1px solid #e4e7eb;
+  background: #fafbfc;
+  display: none;
+}
+
+.city-card.active .city-card__body {
+  display: block;
+}
+
+.facility-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.facility-list li {
+  padding: 6px 0;
+  border-bottom: 1px dashed #e4e7eb;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.facility-list li:last-child {
+  border-bottom: none;
+}
+
+.facility-list .type-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.facility-list .type-badge.SP {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.facility-list .type-badge.PRZ {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.facility-list .facility-name {
+  font-weight: 500;
+}
+
+.facility-list .facility-addr {
+  display: block;
+  color: #7b8794;
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.suggestions {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.suggestions li {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #2b6cb0;
+}
+
+.suggestions li:hover {
+  background: #edf2f7;
+}
+
+/* --- Map ----------------------------------------------------------------- */
+
+.map {
+  flex: 1;
+  height: 100vh;
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 768px) {
+  body {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    max-height: 55vh;
+  }
+  .map {
+    height: 45vh;
+  }
+}
