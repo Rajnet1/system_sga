@@ -214,10 +214,44 @@
 
     state.currentRadiusKm = radiusKm;
 
-    /* If we have local data for this powiat, use it immediately */
+    /* If we have local data for this powiat, use it immediately.
+     * BUT: if none of the local facilities have coordinates (e.g. CSV import
+     * without lat/lon), fall back to Overpass to get coords and merge them in
+     * so schools can be plotted on the map. */
     var localFacilities = state.byPowiat[powiatKey];
     if (localFacilities && localFacilities.length > 0) {
-      processAndRender(localFacilities, powiatKey, radiusKm, "lokalna baza RSPO");
+      var withCoords = 0;
+      for (var i = 0; i < localFacilities.length; i++) {
+        if (localFacilities[i].lat != null && localFacilities[i].lon != null) withCoords++;
+      }
+      if (withCoords > 0) {
+        processAndRender(localFacilities, powiatKey, radiusKm, "lokalna baza RSPO");
+        return;
+      }
+
+      /* Local data exists but has no coordinates — enrich with Overpass geo */
+      setLoading(true);
+      setStatus("Placowki z CSV bez wspolrzednych - pobieram pozycje z OpenStreetMap...");
+      els.results.innerHTML = "";
+      MapLayer.clear();
+
+      Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
+        setLoading(false);
+        if (err || !osmFacilities || osmFacilities.length === 0) {
+          /* Fallback: still render ranking without map markers */
+          setStatus(
+            "Brak wspolrzednych w CSV i nie mozna pobrac z OSM (" +
+              (err ? err.message : "brak wynikow") +
+              "). Wyswietlam ranking bez mapy.",
+            true
+          );
+          processAndRender(localFacilities, powiatKey, radiusKm, "CSV (bez wspolrzednych)");
+          return;
+        }
+        var merged = mergeCoordsByName(localFacilities, osmFacilities);
+        state.byPowiat[powiatKey] = merged;
+        processAndRender(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (wspolrzedne)");
+      });
       return;
     }
 
@@ -256,6 +290,75 @@
       }
       processAndRender(facilities, powiatKey, radiusKm, "OpenStreetMap (Overpass)");
     });
+  }
+
+  /**
+   * Normalise a facility name for fuzzy matching: lower-case, Polish
+   * diacritics removed, punctuation stripped, stop-words dropped.
+   */
+  function normName(s) {
+    return (s || "")
+      .toLowerCase()
+      .replace(/[\u0105\u0104]/g, "a")
+      .replace(/[\u0107\u0106]/g, "c")
+      .replace(/[\u0119\u0118]/g, "e")
+      .replace(/[\u0142\u0141]/g, "l")
+      .replace(/[\u0144\u0143]/g, "n")
+      .replace(/[\u00F3\u00D3]/g, "o")
+      .replace(/[\u015B\u015A]/g, "s")
+      .replace(/[\u017A\u0179]/g, "z")
+      .replace(/[\u017C\u017B]/g, "z")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\b(im|imienia|w|we|ul|nr|sp|szkola|podstawowa|przedszkole|samorzadowe|publiczne|publiczna)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * Merge coordinates from OSM facilities into local facilities by matching
+   * normalised names (with miejscowosc as tiebreaker). Any local facility
+   * without a match keeps lat/lon=null and will be skipped by the map layer,
+   * but still contributes to the ranking.
+   */
+  function mergeCoordsByName(local, osm) {
+    var byName = {};
+    osm.forEach(function (o) {
+      if (o.lat == null || o.lon == null) return;
+      var key = normName(o.nazwa);
+      if (!key) return;
+      if (!byName[key]) byName[key] = [];
+      byName[key].push(o);
+    });
+
+    var matched = 0;
+    var out = local.map(function (f) {
+      if (f.lat != null && f.lon != null) return f;
+      var key = normName(f.nazwa);
+      var candidates = byName[key] || [];
+      /* If multiple candidates, prefer same miejscowosc */
+      var pick = null;
+      if (candidates.length === 1) {
+        pick = candidates[0];
+      } else if (candidates.length > 1) {
+        var targetMiej = (f.miejscowosc || "").toLowerCase();
+        for (var i = 0; i < candidates.length; i++) {
+          if ((candidates[i].miejscowosc || "").toLowerCase() === targetMiej) {
+            pick = candidates[i];
+            break;
+          }
+        }
+        if (!pick) pick = candidates[0];
+      }
+      if (!pick) return f;
+      matched++;
+      var copy = {};
+      for (var k in f) { if (Object.prototype.hasOwnProperty.call(f, k)) copy[k] = f[k]; }
+      copy.lat = pick.lat;
+      copy.lon = pick.lon;
+      return copy;
+    });
+    console.log("mergeCoordsByName: matched " + matched + "/" + local.length + " facilities");
+    return out;
   }
 
   function processAndRender(facilities, powiatKey, radiusKm, source) {
@@ -613,16 +716,16 @@
       result.sp + " SP, " + result.prz + " PRZ).";
 
     if (!result.hasStudents) {
-      statusMsg += " Uwaga: kolumna 'Liczba uczniow' nie zostala wykryta - liczba uczniow bedzie wynosic 0.";
+      statusMsg += " Uwaga: brak kolumny 'Liczba uczniow' - uzyto srednich wartosci (SP=300, PRZ=100).";
     }
 
     if (!result.hasCoords) {
-      statusMsg += " Uwaga: brak współrzędnych geograficznych - placówki nie będą na mapie.";
+      statusMsg += " Uwaga: brak wspolrzednych geograficznych - placowki nie beda na mapie. Sprobuj pobrac dane z OSM (wpisz powiat i kliknij Szukaj - dane zostana pobrane z OpenStreetMap).";
     }
 
     statusMsg += " Mozesz teraz kliknac Szukaj.";
 
-    var statusClass = (result.hasStudents && result.hasCoords) ? "ok" : "err";
+    var statusClass = (result.hasCoords) ? "ok" : "err";
     setCsvStatus(statusMsg, statusClass);
 
     console.log("Import result:", {
@@ -653,6 +756,11 @@
    * Returns { facilities, powiatKey, sp, prz, error }.
    */
   function parseCsvText(text, defaultPowiatKey) {
+    /* Strip UTF-8 BOM if present */
+    if (text.charCodeAt(0) === 0xFEFF) {
+      text = text.slice(1);
+    }
+
     /* Normalise line endings */
     var lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
     if (lines.length < 2) {
@@ -662,34 +770,81 @@
     /* Detect separator */
     var sep = lines[0].indexOf(";") !== -1 ? ";" : ",";
 
-    var header = splitCsvLine(lines[0], sep).map(function (h) {
-      return h.trim().toLowerCase();
-    });
+    /* Normalise a header to: lower-case, no Polish diacritics, collapsed whitespace.
+     * Helps when headers have stray spaces, casing or accented chars. */
+    function normHeader(h) {
+      return (h || "")
+        .replace(/^\uFEFF/, "")
+        .toLowerCase()
+        .replace(/[\u0105\u0104]/g, "a")
+        .replace(/[\u0107\u0106]/g, "c")
+        .replace(/[\u0119\u0118]/g, "e")
+        .replace(/[\u0142\u0141]/g, "l")
+        .replace(/[\u0144\u0143]/g, "n")
+        .replace(/[\u00F3\u00D3]/g, "o")
+        .replace(/[\u015B\u015A]/g, "s")
+        .replace(/[\u017A\u0179]/g, "z")
+        .replace(/[\u017C\u017B]/g, "z")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
 
-    /* Column detection helpers */
+    var header = splitCsvLine(lines[0], sep).map(normHeader);
+
+    /* Column detection: exact match first, then substring fallback so
+     * variants like "liczba uczniow/wychowankow" or "szerokosc geogr."
+     * still get recognised. */
     function findCol(candidates) {
-      for (var i = 0; i < candidates.length; i++) {
-        var idx = header.indexOf(candidates[i].toLowerCase());
+      var normCands = candidates.map(normHeader);
+      /* 1. Exact header match */
+      for (var i = 0; i < normCands.length; i++) {
+        var idx = header.indexOf(normCands[i]);
         if (idx !== -1) return idx;
+      }
+      /* 2. Substring match (either direction) */
+      for (var j = 0; j < normCands.length; j++) {
+        var needle = normCands[j];
+        for (var k = 0; k < header.length; k++) {
+          if (header[k].indexOf(needle) !== -1) return k;
+        }
       }
       return -1;
     }
 
     var COL = {
       rspo:     findCol(["numer rspo", "rspo", "numer rsip"]),
-      nazwa:    findCol(["nazwa", "nazwa placowki", "nazwa podmiotu"]),
-      typ:      findCol(["typ podmiotu", "typ", "typ placowki", "rodzaj placowki"]),
-      miej:     findCol(["miejscowosc", "miejscowo\u015b\u0107", "miasto"]),
+      nazwa:    findCol(["nazwa placowki", "nazwa podmiotu", "nazwa"]),
+      typ:      findCol(["typ podmiotu", "typ placowki", "rodzaj placowki", "typ"]),
+      miej:     findCol(["miejscowosc", "miasto"]),
       gmina:    findCol(["gmina"]),
-      powiat:   findCol(["powiat", "powiat/meiasto"]),
-      woj:      findCol(["wojew\u00f3dztwo", "wojewodztwo"]),
+      powiat:   findCol(["powiat"]),
+      woj:      findCol(["wojewodztwo"]),
       ulica:    findCol(["ulica", "adres"]),
-      nr:       findCol(["numer budynku", "numer", "nr budynku", "nr"]),
+      nr:       findCol(["numer budynku", "nr budynku", "numer", "nr"]),
       kod:      findCol(["kod pocztowy", "kod"]),
-      lat:      findCol(["szeroko\u015b\u0107 geograficzna", "szerokosc geograficzna", "latitude", "lat", "wsp\u00f3\u0142rz\u0119dne geograficzne"]),
-      lon:      findCol(["d\u0142ugo\u015b\u0107 geograficzna", "dlugosc geograficzna", "longitude", "lon", "wsp\u00f3\u0142rz\u0119dne geograficzne"]),
-      uczniowie: findCol(["liczba uczni\u00f3w", "liczba uczniow", "liczba dzieci", "uczniowie", "students", "liczba uczni\u00f3w/dzieci", "ogolna liczba dzieci/uczniow"]),
+      lat:      findCol(["szerokosc geograficzna", "latitude", "lat", "szerokosc"]),
+      lon:      findCol(["dlugosc geograficzna", "longitude", "lon", "dlugosc"]),
+      /* Combined "Współrzędne geograficzne" column (e.g. "49.97, 19.82") */
+      wsp:      findCol(["wspolrzedne geograficzne", "wspolrzedne", "coordinates", "geo"]),
+      uczniowie: findCol([
+        "liczba uczniow/wychowankow",
+        "liczba uczniow i wychowankow",
+        "ogolna liczba uczniow",
+        "ogolna liczba dzieci",
+        "liczba uczniow",
+        "liczba dzieci",
+        "liczba wychowankow",
+        "uczniowie",
+        "students",
+      ]),
     };
+
+    /* If combined column was matched as lat/lon (same index), null them out;
+     * we'll use COL.wsp instead. */
+    if (COL.wsp !== -1 && COL.wsp === COL.lat && COL.wsp === COL.lon) {
+      COL.lat = -1;
+      COL.lon = -1;
+    }
 
     if (COL.nazwa === -1 || COL.typ === -1) {
       return {
@@ -730,9 +885,15 @@
     var detectedPowiatKey = defaultPowiatKey;
     var unknownTypes = {}; /* Track types we skip for debugging */
     var debugCount = 0;   /* Log first few rows for debugging */
-    var hasCoords = COL.lat !== -1 && COL.lon !== -1;
+    var hasCoords = (COL.lat !== -1 && COL.lon !== -1) || COL.wsp !== -1;
 
-    console.log("Starting CSV parsing, total lines:", lines.length, "Has coords:", hasCoords);
+    /* Defaults applied when no student-count column is present.
+     * Approx. Polish averages so ranking is meaningful even without SIO data. */
+    var DEFAULT_UCZNIOWIE_SP = 300;
+    var DEFAULT_UCZNIOWIE_PRZ = 100;
+    var hasStudents = COL.uczniowie !== -1;
+
+    console.log("Starting CSV parsing, total lines:", lines.length, "Has coords:", hasCoords, "Has students:", hasStudents);
 
     for (var i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
@@ -782,9 +943,26 @@
         debugCount++;
       }
 
-      var lat = parseFloat((cells[COL.lat] || "").trim().replace(",", "."));
-      var lon = parseFloat((cells[COL.lon] || "").trim().replace(",", "."));
-      if (isNaN(lat) || isNaN(lon)) { lat = null; lon = null; }
+      var lat = null;
+      var lon = null;
+      if (COL.lat !== -1 && COL.lon !== -1 && COL.lat !== COL.lon) {
+        lat = parseFloat((cells[COL.lat] || "").trim().replace(",", "."));
+        lon = parseFloat((cells[COL.lon] || "").trim().replace(",", "."));
+        if (isNaN(lat) || isNaN(lon)) { lat = null; lon = null; }
+      } else if (COL.wsp !== -1) {
+        /* Combined column, e.g. "49.9762, 19.8220" or "49.9762 19.8220" */
+        var raw = (cells[COL.wsp] || "").trim();
+        /* Extract first two numbers (handles "49,97 19,82" European commas too
+         * by first replacing commas between digits with dots). */
+        var parts = raw.split(/[\s,;]+/).filter(function (p) { return p.length > 0; });
+        /* If we got exactly 2 pieces, straightforward. Otherwise try pairing
+         * first + second numeric token. */
+        if (parts.length >= 2) {
+          var a = parseFloat(parts[0].replace(",", "."));
+          var b = parseFloat(parts[1].replace(",", "."));
+          if (!isNaN(a) && !isNaN(b)) { lat = a; lon = b; }
+        }
+      }
 
       var powiatRaw = COL.powiat !== -1 ? (cells[COL.powiat] || "").trim() : "";
       if (!detectedPowiatKey && powiatRaw) {
@@ -806,9 +984,17 @@
       if (miejscowosc) kodCity.push(miejscowosc);
       if (kodCity.length) addrParts.push(kodCity.join(" "));
 
-      var uczniowieRaw = COL.uczniowie !== -1 ? (cells[COL.uczniowie] || "").trim().replace(/\s/g, "") : "";
-      var uczniowie = parseInt(uczniowieRaw, 10);
-      if (isNaN(uczniowie)) uczniowie = 0;
+      var uczniowie = 0;
+      if (hasStudents) {
+        var uczniowieRaw = (cells[COL.uczniowie] || "").trim().replace(/\s/g, "");
+        uczniowie = parseInt(uczniowieRaw, 10);
+        if (isNaN(uczniowie)) uczniowie = 0;
+      }
+      /* When the CSV has no student-count column, fall back to type-based
+       * averages so the ranking and badges are not all zeros. */
+      if (uczniowie <= 0 && !hasStudents) {
+        uczniowie = typCode === "SP" ? DEFAULT_UCZNIOWIE_SP : DEFAULT_UCZNIOWIE_PRZ;
+      }
 
       var facility = {
         rspo: COL.rspo !== -1 ? (cells[COL.rspo] || "").trim() : "",

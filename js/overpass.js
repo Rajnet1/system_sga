@@ -199,6 +199,31 @@
    * Data parsing
    * --------------------------------------------------------------------- */
 
+  /* Sensible default student counts when OSM has no `capacity` tag.
+   * Based on approximate Polish averages from SIO data so that the
+   * "liczba uczniow" ranking gives meaningful results even without
+   * real per-facility numbers. */
+  var DEFAULT_UCZNIOWIE_SP = 300;
+  var DEFAULT_UCZNIOWIE_PRZ = 100;
+
+  function extractUczniowie(tags, typ) {
+    /* OSM sometimes exposes a `capacity`, `capacity:students`, or
+     * `capacity:pupils` tag — prefer those when present. */
+    var candidates = [
+      tags["capacity:students"],
+      tags["capacity:pupils"],
+      tags["capacity:persons"],
+      tags["capacity"],
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var raw = candidates[i];
+      if (raw == null || raw === "") continue;
+      var n = parseInt(String(raw).replace(/[^0-9]/g, ""), 10);
+      if (!isNaN(n) && n > 0) return n;
+    }
+    return typ === "SP" ? DEFAULT_UCZNIOWIE_SP : DEFAULT_UCZNIOWIE_PRZ;
+  }
+
   function parseElements(elements, key) {
     return elements
       .filter(function (e) {
@@ -228,7 +253,7 @@
           adres: buildAddr(e.tags),
           lat: Math.round(lat * 1e6) / 1e6,
           lon: Math.round(lon * 1e6) / 1e6,
-          uczniowie: 0,
+          uczniowie: extractUczniowie(e.tags, typ),
         };
       })
       .filter(Boolean);
