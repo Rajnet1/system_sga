@@ -64,6 +64,9 @@
     facilityLayer.clearLayers();
     var bounds = [];
     facilities.forEach(function (f) {
+      /* Skip facilities without coordinates */
+      if (f.lat == null || f.lon == null) return;
+
       var marker = L.marker([f.lat, f.lon], { icon: facilityIcon(f.typ) });
       var typLabel = f.typ === "SP" ? "Szkola podstawowa" : "Przedszkole";
       marker.bindPopup(

@@ -351,7 +351,7 @@ body {
 }
 
 .city-card__count {
-  font-size: 13px;
+  font-size: 16px;
   color: #2b6cb0;
   font-weight: 700;
   white-space: nowrap;
@@ -361,6 +361,16 @@ body {
   font-size: 11px;
   color: #7b8794;
   margin-top: 2px;
+}
+
+.city-card__breakdown .uczniowie-sp {
+  color: #1565c0;
+  font-weight: 600;
+}
+
+.city-card__breakdown .uczniowie-prz {
+  color: #2e7d32;
+  font-weight: 600;
 }
 
 .city-card__body {

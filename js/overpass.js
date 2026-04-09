@@ -211,10 +211,14 @@
 
         var typ = e.tags.amenity === "school" ? "SP" : "PRZ";
         var city = e.tags["addr:city"] || e.tags["addr:place"] || e.tags["is_in:city"] || "";
+        var nazwa = e.tags.name || e.tags["name:pl"] || "";
+
+        /* Skip facilities without a name */
+        if (!nazwa || nazwa.trim().length === 0) return null;
 
         return {
           rspo: String(e.id),
-          nazwa: e.tags.name || e.tags["name:pl"] || "(brak nazwy)",
+          nazwa: nazwa,
           typ: typ,
           miejscowosc: city,
           gmina: e.tags["is_in:county"] || "",
@@ -224,6 +228,7 @@
           adres: buildAddr(e.tags),
           lat: Math.round(lat * 1e6) / 1e6,
           lon: Math.round(lon * 1e6) / 1e6,
+          uczniowie: 0,
         };
       })
       .filter(Boolean);

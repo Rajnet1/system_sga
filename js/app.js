@@ -311,13 +311,24 @@
       var inRadius = [];
       var sp = 0;
       var prz = 0;
+      var uczniowieTotal = 0;
+      var uczniowieSp = 0;
+      var uczniowiePrz = 0;
       for (var j = 0; j < facilities.length; j++) {
         var f = facilities[j];
+        /* Skip facilities without a name or coordinates */
+        if (!f.nazwa || f.nazwa.length === 0) continue;
+        if (f.lat == null || f.lon == null) continue;
+
         var d = Geo.haversineKm(center.lat, center.lon, f.lat, f.lon);
         if (d <= radiusKm) {
           inRadius.push(f);
           if (f.typ === "SP") sp++;
           else if (f.typ === "PRZ") prz++;
+
+          uczniowieTotal += f.uczniowie || 0;
+          if (f.typ === "SP") uczniowieSp += f.uczniowie || 0;
+          else if (f.typ === "PRZ") uczniowiePrz += f.uczniowie || 0;
         }
       }
       cities.push({
@@ -328,11 +339,15 @@
         total: inRadius.length,
         sp: sp,
         prz: prz,
+        uczniowieTotal: uczniowieTotal,
+        uczniowieSp: uczniowieSp,
+        uczniowiePrz: uczniowiePrz,
         inRadius: inRadius,
       });
     });
 
     cities.sort(function (a, b) {
+      if (b.uczniowieTotal !== a.uczniowieTotal) return b.uczniowieTotal - a.uczniowieTotal;
       if (b.total !== a.total) return b.total - a.total;
       if (b.sp !== a.sp) return b.sp - a.sp;
       return a.name.localeCompare(b.name, "pl");
@@ -372,13 +387,13 @@
             : "") +
         "</div>" +
         '<div class="city-card__breakdown">' +
-          city.sp +
-          " SP &middot; " +
-          city.prz +
-          " przedszkoli" +
+          '<span class="uczniowie-sp">' + city.uczniowieSp + " ucz. SP</span> &middot; " +
+          '<span class="uczniowie-prz">' + city.uczniowiePrz + " ucz. PRZ</span> &middot; " +
+          '<span style="color:#7b8794;">' + city.sp + ' SP</span> &middot; ' +
+          '<span style="color:#7b8794;">' + city.prz + ' PRZ</span>' +
         "</div>" +
         "</div>" +
-        '<div class="city-card__count">' + city.total + "</div>";
+        '<div class="city-card__count">' + city.uczniowieTotal + " ucz.</div>";
 
       header.addEventListener("click", (function (c) {
         return function () { selectCity(c.key); };
@@ -423,6 +438,13 @@
         addr.className = "facility-addr";
         addr.textContent = f.adres;
         wrap.appendChild(addr);
+      }
+      if (f.uczniowie && f.uczniowie > 0) {
+        var students = document.createElement("span");
+        students.className = "facility-students";
+        students.style.cssText = "color:#7b8794;font-size:11px;margin-left:6px;";
+        students.textContent = f.uczniowie + " ucz.";
+        wrap.appendChild(students);
       }
       li.appendChild(wrap);
       ul.appendChild(li);
@@ -566,11 +588,11 @@
       return;
     }
     if (result.facilities.length === 0) {
-      setCsvStatus(
-        "Nie znaleziono placowek typu Szkola podstawowa / Przedszkole w podanym CSV. " +
-          "Sprawdz czy plik zawiera odpowiednie kolumny.",
-        "err"
-      );
+      var errorMsg = "Nie znaleziono placowek typu Szkola podstawowa / Przedszkole w podanym CSV.";
+      if (result.unknownTypes && result.unknownTypes.length > 0) {
+        errorMsg += " Znalezione typy: " + result.unknownTypes.join(", ") + ".";
+      }
+      setCsvStatus(errorMsg, "err");
       return;
     }
 
@@ -587,11 +609,30 @@
       els.powiatInput.value = key;
     }
 
-    setCsvStatus(
-      "Zaladowano " + result.facilities.length + " placowek z CSV (" +
-        result.sp + " SP, " + result.prz + " PRZ). Mozesz teraz kliknac Szukaj.",
-      "ok"
-    );
+    var statusMsg = "Zaladowano " + result.facilities.length + " placowek z CSV (" +
+      result.sp + " SP, " + result.prz + " PRZ).";
+
+    if (!result.hasStudents) {
+      statusMsg += " Uwaga: kolumna 'Liczba uczniow' nie zostala wykryta - liczba uczniow bedzie wynosic 0.";
+    }
+
+    if (!result.hasCoords) {
+      statusMsg += " Uwaga: brak współrzędnych geograficznych - placówki nie będą na mapie.";
+    }
+
+    statusMsg += " Mozesz teraz kliknac Szukaj.";
+
+    var statusClass = (result.hasStudents && result.hasCoords) ? "ok" : "err";
+    setCsvStatus(statusMsg, statusClass);
+
+    console.log("Import result:", {
+      facilitiesCount: result.facilities.length,
+      sp: result.sp,
+      prz: result.prz,
+      hasStudents: result.hasStudents,
+      hasCoords: result.hasCoords,
+      sampleFacility: result.facilities[0]
+    });
 
     /* Auto-close after short delay and trigger search */
     setTimeout(function () {
@@ -635,46 +676,111 @@
     }
 
     var COL = {
-      rspo:     findCol(["numer rspo", "rspo", "numer rspo"]),
-      nazwa:    findCol(["nazwa", "nazwa placowki"]),
-      typ:      findCol(["typ podmiotu", "typ", "typ placowki"]),
-      miej:     findCol(["miejscowosc", "miejscowo\u015b\u0107"]),
+      rspo:     findCol(["numer rspo", "rspo", "numer rsip"]),
+      nazwa:    findCol(["nazwa", "nazwa placowki", "nazwa podmiotu"]),
+      typ:      findCol(["typ podmiotu", "typ", "typ placowki", "rodzaj placowki"]),
+      miej:     findCol(["miejscowosc", "miejscowo\u015b\u0107", "miasto"]),
       gmina:    findCol(["gmina"]),
-      powiat:   findCol(["powiat"]),
+      powiat:   findCol(["powiat", "powiat/meiasto"]),
       woj:      findCol(["wojew\u00f3dztwo", "wojewodztwo"]),
-      ulica:    findCol(["ulica"]),
-      nr:       findCol(["numer budynku", "numer", "nr budynku"]),
-      kod:      findCol(["kod pocztowy"]),
-      lat:      findCol(["szeroko\u015b\u0107 geograficzna", "szerokosc geograficzna", "latitude", "lat"]),
-      lon:      findCol(["d\u0142ugo\u015b\u0107 geograficzna", "dlugosc geograficzna", "longitude", "lon"]),
+      ulica:    findCol(["ulica", "adres"]),
+      nr:       findCol(["numer budynku", "numer", "nr budynku", "nr"]),
+      kod:      findCol(["kod pocztowy", "kod"]),
+      lat:      findCol(["szeroko\u015b\u0107 geograficzna", "szerokosc geograficzna", "latitude", "lat", "wsp\u00f3\u0142rz\u0119dne geograficzne"]),
+      lon:      findCol(["d\u0142ugo\u015b\u0107 geograficzna", "dlugosc geograficzna", "longitude", "lon", "wsp\u00f3\u0142rz\u0119dne geograficzne"]),
+      uczniowie: findCol(["liczba uczni\u00f3w", "liczba uczniow", "liczba dzieci", "uczniowie", "students", "liczba uczni\u00f3w/dzieci", "ogolna liczba dzieci/uczniow"]),
     };
 
     if (COL.nazwa === -1 || COL.typ === -1) {
       return {
         error:
-          "Nie znaleziono kolumn 'Nazwa' i 'Typ podmiotu'. Dostepne naglowki: " +
-          header.join(", "),
+          "Nie znaleziono kolumn 'Nazwa' i 'Typ'. Dostepne naglowki: " +
+          header.join(", ") +
+          ". Upewnij sie, ze CSV ma naglowki z nazwami kolumn.",
         facilities: [],
       };
     }
 
+    /* Debug: log column detection */
+    console.log("CSV Columns detected:", {
+      typ: COL.typ,
+      typValue: header[COL.typ],
+      nazwa: COL.nazwa,
+      nazwaValue: header[COL.nazwa],
+      allHeaders: header
+    });
+
     var WANTED = {
-      "szkola podstawowa": "SP",
-      "szko\u0142a podstawowa": "SP",
+      /* Direct match with polish chars */
+      "szkoła podstawowa": "SP",
       "przedszkole": "PRZ",
+      /* After NFD normalization (polish chars removed) */
+      "szkola podstawowa": "SP",
+      "przedszkole": "PRZ",
+      "przedszkole publiczne": "PRZ",
+      "szkola": "SP",
+      "publiczna szkola podstawowa": "SP",
+      "publiczne przedszkole": "PRZ",
+      "samorzadowa szkola podstawowa": "SP",
+      "samorzadowe przedszkole": "PRZ",
     };
 
     var facilities = [];
     var sp = 0, prz = 0;
     var detectedPowiatKey = defaultPowiatKey;
+    var unknownTypes = {}; /* Track types we skip for debugging */
+    var debugCount = 0;   /* Log first few rows for debugging */
+    var hasCoords = COL.lat !== -1 && COL.lon !== -1;
+
+    console.log("Starting CSV parsing, total lines:", lines.length, "Has coords:", hasCoords);
 
     for (var i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
       var cells = splitCsvLine(lines[i], sep);
 
-      var typRaw = (cells[COL.typ] || "").trim().toLowerCase();
-      var typCode = WANTED[typRaw];
-      if (!typCode) continue;
+      var typRaw = (cells[COL.typ] || "").trim();
+      var typNormalized = typRaw.toLowerCase()
+        .replace(/[\u0105\u0104]/g, "a")  /* ą, Ą */
+        .replace(/[\u0107\u0106]/g, "c")  /* ć, Ć */
+        .replace(/[\u0119\u0118]/g, "e")  /* ę, Ę */
+        .replace(/[\u0142\u0141]/g, "l")  /* ł, Ł */
+        .replace(/[\u0144\u0143]/g, "n")  /* ń, Ń */
+        .replace(/[\u00F3\u00D3]/g, "o")  /* ó, Ó */
+        .replace(/[\u015B\u015A]/g, "s")  /* ś, Ś */
+        .replace(/[\u017A\u0179]/g, "z")  /* ź, Ź */
+        .replace(/[\u017C\u017B]/g, "z")  /* ż, Ż */
+        .replace(/\s+/g, " ").trim();
+
+      var typCode = WANTED[typNormalized];
+
+      /* Fallback: check if type contains key words (without special chars) */
+      if (!typCode) {
+        if (typNormalized.indexOf("szkola") !== -1 && typNormalized.indexOf("podstawowa") !== -1) {
+          typCode = "SP";
+        } else if (typNormalized.indexOf("przedszkole") !== -1) {
+          typCode = "PRZ";
+        } else {
+          /* Track unknown types for debugging - show both original and normalized */
+          var debugKey = typRaw + " -> " + typNormalized;
+          if (!unknownTypes[debugKey]) unknownTypes[debugKey] = 0;
+          unknownTypes[debugKey]++;
+          if (debugCount < 5) {
+            console.log("Unknown type rejected:", debugKey);
+            debugCount++;
+          }
+          continue;
+        }
+      }
+
+      /* Debug: log successful type matching for first few rows */
+      if (debugCount < 5) {
+        console.log("Row " + i + " SUCCESS:", {
+          typRaw: typRaw,
+          typCode: typCode,
+          nazwaRaw: cells[COL.nazwa]
+        });
+        debugCount++;
+      }
 
       var lat = parseFloat((cells[COL.lat] || "").trim().replace(",", "."));
       var lon = parseFloat((cells[COL.lon] || "").trim().replace(",", "."));
@@ -700,6 +806,10 @@
       if (miejscowosc) kodCity.push(miejscowosc);
       if (kodCity.length) addrParts.push(kodCity.join(" "));
 
+      var uczniowieRaw = COL.uczniowie !== -1 ? (cells[COL.uczniowie] || "").trim().replace(/\s/g, "") : "";
+      var uczniowie = parseInt(uczniowieRaw, 10);
+      if (isNaN(uczniowie)) uczniowie = 0;
+
       var facility = {
         rspo: COL.rspo !== -1 ? (cells[COL.rspo] || "").trim() : "",
         nazwa: (cells[COL.nazwa] || "").trim(),
@@ -712,16 +822,50 @@
         adres: addrParts.join(", "),
         lat: lat,
         lon: lon,
+        uczniowie: uczniowie,
       };
 
-      /* Filter out rows without coordinates */
-      if (facility.lat === null || facility.lon === null) continue;
+      /* Filter out rows without name */
+      if (!facility.nazwa || facility.nazwa.length === 0 || facility.nazwa === "(brak nazwy)") continue;
 
+      /* Debug: log facilities without coordinates */
+      if (debugCount < 10 && (facility.lat === null || facility.lon === null)) {
+        console.log("Row " + i + " skipped (no coords):", facility.nazwa);
+        debugCount++;
+      }
+
+      /* Allow facilities without coordinates for ranking purposes */
       facilities.push(facility);
       if (typCode === "SP") sp++; else prz++;
     }
 
-    return { facilities: facilities, powiatKey: detectedPowiatKey, sp: sp, prz: prz, error: null };
+    /* Build helpful error message if no facilities found */
+    var unknownTypeList = Object.keys(unknownTypes);
+    var errorHint = "";
+    if (facilities.length === 0 && unknownTypeList.length > 0) {
+      errorHint = " Znalezione typy placowek w CSV: " + unknownTypeList.join(", ") + ". " +
+        "Szukane typy: 'Szkoła podstawowa', 'Przedszkole'. " +
+        "Upewnij sie, ze w CSV sa tylko te typy lub dodaj ich warianty.";
+    } else if (facilities.length === 0) {
+      var rowCount = lines.length - 1;
+      errorHint = " CSV ma " + rowCount + " wierszy (bez naglowka). " +
+        "Mozliwe, ze nie ma wierszy z typami 'Szkoła podstawowa' lub 'Przedszkole'. " +
+        "Dostepne typy w pliku: " + (unknownTypeList.length > 0 ? unknownTypeList.join(", ") : "brak");
+    } else if (!hasCoords) {
+      /* This is just a warning, not a critical error */
+      console.log("Warning: CSV imported but has no coordinates");
+    }
+
+    return {
+      facilities: facilities,
+      powiatKey: detectedPowiatKey,
+      sp: sp,
+      prz: prz,
+      hasStudents: COL.uczniowie !== -1,
+      hasCoords: hasCoords,
+      unknownTypes: unknownTypeList,
+      error: null /* Don't treat missing coords as error */
+    };
   }
 
   /**
