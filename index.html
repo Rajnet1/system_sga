@@ -47,17 +47,58 @@
         />
       </label>
 
-      <button type="submit">Szukaj</button>
+      <div class="form-row">
+        <button type="submit">Szukaj</button>
+        <button type="button" id="csv-import-btn" class="btn-secondary" title="Wklej CSV z RSPO dla szybszego i pelniejszego wyniku">
+          + wklej CSV
+        </button>
+      </div>
     </form>
 
-    <div id="status" class="status"></div>
+    <!-- Modal: wklej CSV z RSPO dla wybranego powiatu -->
+    <div id="csv-modal" class="csv-modal" hidden>
+      <div class="csv-modal__box">
+        <div class="csv-modal__header">
+          <strong>Wklej CSV z RSPO</strong>
+          <button type="button" id="csv-modal-close" class="csv-modal__close" title="Zamknij">&times;</button>
+        </div>
+        <p class="csv-modal__hint">
+          Pobierz CSV ze strony
+          <a href="https://rspo.gov.pl/zaawansowana" target="_blank" rel="noopener">rspo.gov.pl/zaawansowana</a>
+          (filtr: Szkola podstawowa + Przedszkole, wybrany powiat), a nastepnie wklej calą zawartosc pliku ponizej.
+        </p>
+        <textarea
+          id="csv-textarea"
+          class="csv-modal__textarea"
+          placeholder="Wklej tutaj zawartosc pliku CSV (separatorem jest srednik ;)..."
+          spellcheck="false"
+        ></textarea>
+        <div id="csv-parse-status" class="csv-modal__parse-status"></div>
+        <div class="csv-modal__actions">
+          <button type="button" id="csv-load-btn" class="csv-modal__load-btn">Zaladuj dane</button>
+          <button type="button" id="csv-cancel-btn" class="csv-modal__cancel-btn">Anuluj</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="status" class="status">Ladowanie danych...</div>
 
     <section id="results" class="results" aria-live="polite"></section>
 
     <footer class="sidebar__footer">
       <small>
-        Dane: <a href="https://rspo.gov.pl" target="_blank" rel="noopener">RSPO</a>.
-        Mapa: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
+        Dane: <a href="https://rspo.gov.pl" target="_blank" rel="noopener">RSPO</a> /
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
+        <button
+          id="clear-cache-btn"
+          type="button"
+          title="Wyczyść pamięć podręczną Overpass (odświeży dane)"
+          style="
+            margin-left:6px;background:none;border:none;color:#7b8794;
+            cursor:pointer;font-size:11px;padding:0;text-decoration:underline;
+          "
+          onclick="var n=Overpass.clearCache();alert('Wyczyszczono '+n+' wpisów cache. Dane zostaną pobrane ponownie przy następnym wyszukiwaniu.');"
+        >wyczyść cache</button>
       </small>
     </footer>
   </aside>
@@ -71,6 +112,7 @@
   ></script>
   <script src="js/geo.js"></script>
   <script src="js/map.js"></script>
+  <script src="js/overpass.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

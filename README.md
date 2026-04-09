@@ -10,16 +10,29 @@ miast wedlug liczby placowek w promieniu zadanym przez uzytkownika.
 
 ## Jak dziala
 
-1. Wpisz nazwe powiatu (np. `krakowski`, `warszawski zachodni`).
+1. Wpisz nazwe powiatu (np. `krakowski`, `warszawski zachodni`) — lista podpowiedzi
+   uzupelnia sie automatycznie z bazy OpenStreetMap (wszystkie 380 polskich powiatow).
 2. Podaj promien w kilometrach (domyslnie 5 km).
 3. Aplikacja:
+   - pobiera placowki z bazy lokalnej (RSPO) lub z Overpass API (OSM), jesli lokalna
+     baza nie zawiera danego powiatu,
    - wyswietla wszystkie placowki w powiecie na mapie,
-   - grupuje placowki po `miejscowosci`, liczac centroid jako przybliony
-     srodek miasta,
-   - dla kazdego miasta liczy ile SP + przedszkoli znajduje sie w promieniu
-     wokol tego centroidu,
+   - grupuje placowki po `miejscowosci`, liczac centroid jako przybliony srodek miasta,
+   - dla kazdego miasta liczy ile SP + przedszkoli znajduje sie w promieniu wokol
+     tego centroidu,
    - sortuje miasta od najwyzszej do najnizszej liczby placowek w promieniu,
    - po klikieciu w miasto pokazuje pelna liste nazw placowek w promieniu.
+
+### Priorytety zrodel danych
+
+| Zrodlo | Kiedy uzywane | Dokladnosc |
+|--------|---------------|------------|
+| Lokalna baza `data/placowki.json` (RSPO) | jesli powiat w bazie | bardzo wysoka |
+| Overpass API (OpenStreetMap) | kazdy powiat, na zywo z internetu | dobra |
+
+Wyniki z Overpass sa cachowane w `localStorage` przegladarki na 24 godziny.
+Lista powiatow jest cachowana 7 dni. Kliknij **wyczysc cache** (stopka) aby
+wymusic swieze dane.
 
 ## Uruchomienie
 

@@ -1,14 +1,25 @@
-/* Main app: load data, handle search form, build ranking, wire UI. */
+/* Main app: load data, handle search form, build ranking, wire UI.
+ *
+ * Data flow priority:
+ *  1. Local data/placowki.json (pre-processed RSPO data, fast, offline-safe)
+ *  2. Overpass API (OpenStreetMap, live, fetched in-browser, cached 24h)
+ *
+ * Powiat autocomplete:
+ *  - Keys from local JSON (always fast)
+ *  - Merged with Overpass powiat list (async, cached 7 days)
+ */
 (function () {
   "use strict";
 
   var state = {
-    facilities: [], // all loaded facilities
-    byPowiat: {}, // powiat_key -> [facility, ...]
-    powiatKeys: [], // sorted unique powiat keys
-    currentCities: [], // ranking for last search
+    facilities: [],       /* all locally loaded facilities */
+    byPowiat: {},         /* powiat_key -> [facility, ...] from local JSON */
+    powiatKeys: [],       /* sorted unique powiat keys (local) */
+    datalistKeys: new Set(), /* all known powiat keys for datalist */
+    currentCities: [],    /* ranking for last search */
     currentRadiusKm: 5,
     activeCityKey: null,
+    searching: false,
   };
 
   var els = {};
@@ -20,50 +31,104 @@
     els.powiatList = document.getElementById("powiat-list");
     els.status = document.getElementById("status");
     els.results = document.getElementById("results");
+    els.submitBtn = els.form.querySelector("button[type=submit]");
+    els.csvImportBtn = document.getElementById("csv-import-btn");
+    els.csvModal = document.getElementById("csv-modal");
+    els.csvModalClose = document.getElementById("csv-modal-close");
+    els.csvTextarea = document.getElementById("csv-textarea");
+    els.csvParseStatus = document.getElementById("csv-parse-status");
+    els.csvLoadBtn = document.getElementById("csv-load-btn");
+    els.csvCancelBtn = document.getElementById("csv-cancel-btn");
 
     MapLayer.initMap("map");
 
     els.form.addEventListener("submit", function (e) {
       e.preventDefault();
-      handleSearch();
+      if (!state.searching) handleSearch();
     });
 
-    loadData();
+    /* CSV import modal */
+    if (els.csvImportBtn) {
+      els.csvImportBtn.addEventListener("click", openCsvModal);
+    }
+    if (els.csvModalClose) els.csvModalClose.addEventListener("click", closeCsvModal);
+    if (els.csvCancelBtn) els.csvCancelBtn.addEventListener("click", closeCsvModal);
+    if (els.csvModal) {
+      els.csvModal.addEventListener("click", function (e) {
+        if (e.target === els.csvModal) closeCsvModal();
+      });
+    }
+    if (els.csvLoadBtn) els.csvLoadBtn.addEventListener("click", importCsv);
+
+    /* Load local JSON (fast, offline) and async Overpass powiat list */
+    loadLocalData();
+    loadOverpassPowiatList();
   });
 
+  /* -----------------------------------------------------------------------
+   * Status helpers
+   * --------------------------------------------------------------------- */
+
   function setStatus(text, isError) {
-    els.status.textContent = text || "";
-    els.status.classList.toggle("error", Boolean(isError));
+    if (els.status) {
+      els.status.textContent = text || "";
+      els.status.classList.toggle("error", Boolean(isError));
+    }
   }
 
-  function loadData() {
-    setStatus("Ladowanie danych placowek...");
+  function setLoading(loading) {
+    state.searching = loading;
+    if (els.submitBtn) {
+      els.submitBtn.disabled = loading;
+      els.submitBtn.textContent = loading ? "Ładowanie..." : "Szukaj";
+    }
+  }
+
+  /* -----------------------------------------------------------------------
+   * Data loading
+   * --------------------------------------------------------------------- */
+
+  function loadLocalData() {
+    setStatus("Ładowanie lokalnej bazy placówek...");
     fetch("data/placowki.json", { cache: "no-cache" })
       .then(function (res) {
-        if (!res.ok) {
-          throw new Error("HTTP " + res.status);
-        }
+        if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
       .then(function (data) {
         state.facilities = data;
         indexByPowiat(data);
-        populateDatalist(state.powiatKeys);
+        mergeIntoDatalist(state.powiatKeys);
         setStatus(
-          "Zaladowano " +
+          "Załadowano " +
             data.length +
-            " placowek w " +
+            " placówek z lokalnej bazy (" +
             state.powiatKeys.length +
-            " powiatach."
+            " powiatów)."
         );
       })
       .catch(function (err) {
-        console.error(err);
+        console.warn("Lokalna baza placowki.json niedostepna:", err.message);
         setStatus(
-          "Nie udalo sie zaladowac data/placowki.json. Uruchom skrypt scripts/preprocess_rspo.py.",
-          true
+          "Brak lokalnej bazy — dane pobierane na żądanie z OpenStreetMap."
         );
       });
+  }
+
+  function loadOverpassPowiatList() {
+    Overpass.loadPowiatList(function (err, list) {
+      if (err || !list) {
+        console.warn("Overpass powiat list error:", err);
+        return;
+      }
+      var keys = list.map(function (item) { return item.key; });
+      mergeIntoDatalist(keys);
+      setStatus(
+        "Gotowy. Zidentyfikowano " +
+          state.datalistKeys.size +
+          " powiatów (baza OSM). Wpisz powiat i kliknij Szukaj."
+      );
+    });
   }
 
   function indexByPowiat(facilities) {
@@ -79,17 +144,31 @@
     state.powiatKeys = Object.keys(byPowiat).sort();
   }
 
-  function populateDatalist(keys) {
-    els.powiatList.innerHTML = "";
-    for (var i = 0; i < keys.length; i++) {
-      var opt = document.createElement("option");
-      opt.value = keys[i];
-      els.powiatList.appendChild(opt);
-    }
+  function mergeIntoDatalist(keys) {
+    keys.forEach(function (k) { state.datalistKeys.add(k); });
+    rebuildDatalist();
   }
 
+  function rebuildDatalist() {
+    if (!els.powiatList) return;
+    els.powiatList.innerHTML = "";
+    /* Sort before rendering */
+    var sorted = Array.from(state.datalistKeys).sort(function (a, b) {
+      return a.localeCompare(b, "pl");
+    });
+    sorted.forEach(function (k) {
+      var opt = document.createElement("option");
+      opt.value = k;
+      els.powiatList.appendChild(opt);
+    });
+  }
+
+  /* -----------------------------------------------------------------------
+   * Search handler
+   * --------------------------------------------------------------------- */
+
   function normalizePowiat(input) {
-    return (input || "").trim().toLowerCase().replace(/^powiat\s+/i, "");
+    return Overpass.powiatKey(input);
   }
 
   function handleSearch() {
@@ -98,37 +177,70 @@
     var radiusKm = parseFloat(els.radiusInput.value);
 
     if (!powiatKey) {
-      setStatus("Wpisz nazwe powiatu.", true);
+      setStatus("Wpisz nazwę powiatu.", true);
       return;
     }
     if (!radiusKm || radiusKm <= 0) {
-      setStatus("Promien musi byc dodatni.", true);
-      return;
-    }
-
-    var facilities = state.byPowiat[powiatKey];
-    if (!facilities || facilities.length === 0) {
-      setStatus('Nie znaleziono powiatu "' + rawPowiat + '".', true);
-      renderSuggestions(powiatKey);
-      MapLayer.clear();
+      setStatus("Promień musi być dodatni.", true);
       return;
     }
 
     state.currentRadiusKm = radiusKm;
+
+    /* If we have local data for this powiat, use it immediately */
+    var localFacilities = state.byPowiat[powiatKey];
+    if (localFacilities && localFacilities.length > 0) {
+      processAndRender(localFacilities, powiatKey, radiusKm, "lokalna baza RSPO");
+      return;
+    }
+
+    /* Otherwise fetch from Overpass */
+    setLoading(true);
+    setStatus("Pobieranie danych z OpenStreetMap dla powiatu: " + rawPowiat + "...");
+    els.results.innerHTML = "";
+    MapLayer.clear();
+
+    Overpass.fetchFacilities(powiatKey, function (err, facilities) {
+      setLoading(false);
+      if (err) {
+        setStatus(
+          "Błąd pobierania z Overpass: " + err.message + ". Spróbuj ponownie.",
+          true
+        );
+        renderSuggestions(powiatKey);
+        return;
+      }
+      if (!facilities || facilities.length === 0) {
+        setStatus(
+          'Nie znaleziono placówek dla powiatu ' +
+            powiatKey +
+            '". Sprawdź pisownię.',
+          true
+        );
+        renderSuggestions(powiatKey);
+        return;
+      }
+
+      /* Cache in local state so re-renders don't hit Overpass again */
+      state.byPowiat[powiatKey] = facilities;
+      if (!state.datalistKeys.has(powiatKey)) {
+        state.datalistKeys.add(powiatKey);
+        rebuildDatalist();
+      }
+      processAndRender(facilities, powiatKey, radiusKm, "OpenStreetMap (Overpass)");
+    });
+  }
+
+  function processAndRender(facilities, powiatKey, radiusKm, source) {
     var cities = buildRanking(facilities, radiusKm);
     state.currentCities = cities;
     state.activeCityKey = null;
 
     setStatus(
-      "Powiat " +
-        powiatKey +
-        ": " +
-        facilities.length +
-        " placowek, " +
-        cities.length +
-        " miast. Promien " +
-        radiusKm +
-        " km."
+      "Powiat " + powiatKey + ": " +
+        facilities.length + " placowek, " +
+        cities.length + " miejscowosci | promien " +
+        radiusKm + " km | zrodlo: " + source
     );
 
     renderRanking(cities);
@@ -139,22 +251,25 @@
     });
   }
 
+  /* -----------------------------------------------------------------------
+   * Ranking
+   * --------------------------------------------------------------------- */
+
   /**
-   * For each unique miejscowosc in the powiat, compute the centroid of its
-   * facilities and count how many facilities in the whole powiat fall within
-   * `radiusKm` of that centroid. Returns cities sorted by total desc.
+   * For each unique city in the powiat, compute the centroid of its facilities
+   * and count how many facilities in the whole powiat fall within `radiusKm`.
    */
   function buildRanking(facilities, radiusKm) {
-    // Group by city key (miejscowosc + gmina to avoid collisions).
+    /* Facilities without a city get grouped as "(nieznana miejscowość)" */
     var groups = {};
     for (var i = 0; i < facilities.length; i++) {
       var f = facilities[i];
-      var key =
-        (f.miejscowosc || "?") + "|" + (f.gmina || "");
+      var city = (f.miejscowosc || "").trim() || "(nieznana miejscowość)";
+      var key = city + "|" + (f.gmina || "");
       if (!groups[key]) {
         groups[key] = {
           key: key,
-          name: f.miejscowosc || "(nieznana miejscowosc)",
+          name: city,
           gmina: f.gmina || "",
           members: [],
         };
@@ -198,10 +313,14 @@
     return cities;
   }
 
+  /* -----------------------------------------------------------------------
+   * Rendering
+   * --------------------------------------------------------------------- */
+
   function renderRanking(cities) {
     els.results.innerHTML = "";
     if (cities.length === 0) {
-      els.results.textContent = "Brak miast.";
+      els.results.textContent = "Brak wyników.";
       return;
     }
     cities.forEach(function (city, idx) {
@@ -214,28 +333,29 @@
       header.innerHTML =
         "<div>" +
         '<div class="city-card__name">' +
-        (idx + 1) +
-        ". " +
-        escapeHtml(city.name) +
-        (city.gmina && city.gmina !== city.name
-          ? ' <span style="color:#7b8794;font-weight:400;">(' +
-            escapeHtml(city.gmina) +
-            ")</span>"
-          : "") +
+          (idx + 1) +
+          ". " +
+          escapeHtml(city.name) +
+          (city.gmina && city.gmina !== city.name
+            ? ' <span style="color:#7b8794;font-weight:400;">' +
+              "(" +
+              escapeHtml(city.gmina) +
+              ")" +
+              "</span>"
+            : "") +
         "</div>" +
         '<div class="city-card__breakdown">' +
-        city.sp +
-        " SP &middot; " +
-        city.prz +
-        " przedszkoli" +
+          city.sp +
+          " SP &middot; " +
+          city.prz +
+          " przedszkoli" +
         "</div>" +
         "</div>" +
-        '<div class="city-card__count">' +
-        city.total +
-        "</div>";
-      header.addEventListener("click", function () {
-        selectCity(city.key);
-      });
+        '<div class="city-card__count">' + city.total + "</div>";
+
+      header.addEventListener("click", (function (c) {
+        return function () { selectCity(c.key); };
+      })(city));
       card.appendChild(header);
 
       var body = document.createElement("div");
@@ -251,12 +371,11 @@
     var ul = document.createElement("ul");
     ul.className = "facility-list";
     if (facilities.length === 0) {
-      var li = document.createElement("li");
-      li.textContent = "Brak placowek w promieniu.";
-      ul.appendChild(li);
+      var empty = document.createElement("li");
+      empty.textContent = "Brak placówek w promieniu.";
+      ul.appendChild(empty);
       return ul;
     }
-    // Group: SP first, then PRZ, alphabetical inside each.
     var sorted = facilities.slice().sort(function (a, b) {
       if (a.typ !== b.typ) return a.typ === "SP" ? -1 : 1;
       return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
@@ -285,25 +404,27 @@
   }
 
   function selectCity(cityKey) {
-    var city = state.currentCities.find(function (c) {
-      return c.key === cityKey;
-    });
+    var city = null;
+    for (var i = 0; i < state.currentCities.length; i++) {
+      if (state.currentCities[i].key === cityKey) {
+        city = state.currentCities[i];
+        break;
+      }
+    }
     if (!city) return;
-
     state.activeCityKey = cityKey;
 
-    // Update card active state
     var cards = els.results.querySelectorAll(".city-card");
-    cards.forEach(function (card) {
+    for (var j = 0; j < cards.length; j++) {
+      var card = cards[j];
       if (card.dataset.cityKey === cityKey) {
         card.classList.add("active");
         card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       } else {
         card.classList.remove("active");
       }
-    });
+    }
 
-    // Update map
     MapLayer.drawRadius(city.center, state.currentRadiusKm);
     MapLayer.focusOn(city.center.lat, city.center.lon, 12);
   }
@@ -311,17 +432,14 @@
   function renderSuggestions(partial) {
     els.results.innerHTML = "";
     if (!partial) return;
-    var matches = state.powiatKeys
-      .filter(function (k) {
-        return k.indexOf(partial) !== -1;
-      })
-      .slice(0, 10);
+    var all = Array.from(state.datalistKeys);
+    var matches = all
+      .filter(function (k) { return k.indexOf(partial) !== -1; })
+      .slice(0, 12);
     if (matches.length === 0) return;
     var header = document.createElement("div");
-    header.style.padding = "8px 10px 0";
-    header.style.fontSize = "12px";
-    header.style.color = "#52606d";
-    header.textContent = "Moze chodzilo o:";
+    header.style.cssText = "padding:8px 10px 0;font-size:12px;color:#52606d;";
+    header.textContent = "Może chodziło o:";
     els.results.appendChild(header);
     var ul = document.createElement("ul");
     ul.className = "suggestions";
@@ -345,5 +463,224 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  /* -----------------------------------------------------------------------
+   * CSV Import Modal
+   * --------------------------------------------------------------------- */
+
+  function openCsvModal() {
+    if (!els.csvModal) return;
+    /* Pre-fill powiat hint if user already typed something */
+    var hint = normalizePowiat(els.powiatInput.value || "");
+    if (hint && els.csvTextarea) {
+      els.csvTextarea.placeholder =
+        "Wklej tutaj zawartosc pliku CSV dla powiatu '" + hint + "' (separator: srednik ;)...";
+    }
+    els.csvModal.removeAttribute("hidden");
+    if (els.csvParseStatus) els.csvParseStatus.textContent = "";
+    if (els.csvTextarea) els.csvTextarea.focus();
+  }
+
+  function closeCsvModal() {
+    if (els.csvModal) els.csvModal.setAttribute("hidden", "");
+    if (els.csvTextarea) els.csvTextarea.value = "";
+    if (els.csvParseStatus) els.csvParseStatus.textContent = "";
+  }
+
+  function importCsv() {
+    var csv = els.csvTextarea ? els.csvTextarea.value.trim() : "";
+    if (!csv) {
+      setCsvStatus("Wklej zawartosc CSV.", "err");
+      return;
+    }
+
+    var powiatInput = normalizePowiat(els.powiatInput.value || "");
+    var result = parseCsvText(csv, powiatInput);
+
+    if (result.error) {
+      setCsvStatus("Blad parsowania: " + result.error, "err");
+      return;
+    }
+    if (result.facilities.length === 0) {
+      setCsvStatus(
+        "Nie znaleziono placowek typu Szkola podstawowa / Przedszkole w podanym CSV. " +
+          "Sprawdz czy plik zawiera odpowiednie kolumny.",
+        "err"
+      );
+      return;
+    }
+
+    /* Inject into state */
+    var key = result.powiatKey || powiatInput || "csv-import";
+    state.byPowiat[key] = result.facilities;
+    if (!state.datalistKeys.has(key)) {
+      state.datalistKeys.add(key);
+      rebuildDatalist();
+    }
+
+    /* Set the powiat input */
+    if (key && els.powiatInput) {
+      els.powiatInput.value = key;
+    }
+
+    setCsvStatus(
+      "Zaladowano " + result.facilities.length + " placowek z CSV (" +
+        result.sp + " SP, " + result.prz + " PRZ). Mozesz teraz kliknac Szukaj.",
+      "ok"
+    );
+
+    /* Auto-close after short delay and trigger search */
+    setTimeout(function () {
+      closeCsvModal();
+      if (!state.searching) handleSearch();
+    }, 1200);
+  }
+
+  function setCsvStatus(msg, cls) {
+    if (!els.csvParseStatus) return;
+    els.csvParseStatus.textContent = msg;
+    els.csvParseStatus.className = "csv-modal__parse-status" + (cls ? " " + cls : "");
+  }
+
+  /**
+   * Minimal in-browser CSV parser for RSPO exports.
+   * Handles semicolon-separated files with a header row.
+   * Returns { facilities, powiatKey, sp, prz, error }.
+   */
+  function parseCsvText(text, defaultPowiatKey) {
+    /* Normalise line endings */
+    var lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    if (lines.length < 2) {
+      return { error: "Plik zbyt krotki (wymagany naglowek + dane).", facilities: [] };
+    }
+
+    /* Detect separator */
+    var sep = lines[0].indexOf(";") !== -1 ? ";" : ",";
+
+    var header = splitCsvLine(lines[0], sep).map(function (h) {
+      return h.trim().toLowerCase();
+    });
+
+    /* Column detection helpers */
+    function findCol(candidates) {
+      for (var i = 0; i < candidates.length; i++) {
+        var idx = header.indexOf(candidates[i].toLowerCase());
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    }
+
+    var COL = {
+      rspo:     findCol(["numer rspo", "rspo", "numer rspo"]),
+      nazwa:    findCol(["nazwa", "nazwa placowki"]),
+      typ:      findCol(["typ podmiotu", "typ", "typ placowki"]),
+      miej:     findCol(["miejscowosc", "miejscowo\u015b\u0107"]),
+      gmina:    findCol(["gmina"]),
+      powiat:   findCol(["powiat"]),
+      woj:      findCol(["wojew\u00f3dztwo", "wojewodztwo"]),
+      ulica:    findCol(["ulica"]),
+      nr:       findCol(["numer budynku", "numer", "nr budynku"]),
+      kod:      findCol(["kod pocztowy"]),
+      lat:      findCol(["szeroko\u015b\u0107 geograficzna", "szerokosc geograficzna", "latitude", "lat"]),
+      lon:      findCol(["d\u0142ugo\u015b\u0107 geograficzna", "dlugosc geograficzna", "longitude", "lon"]),
+    };
+
+    if (COL.nazwa === -1 || COL.typ === -1) {
+      return {
+        error:
+          "Nie znaleziono kolumn 'Nazwa' i 'Typ podmiotu'. Dostepne naglowki: " +
+          header.join(", "),
+        facilities: [],
+      };
+    }
+
+    var WANTED = {
+      "szkola podstawowa": "SP",
+      "szko\u0142a podstawowa": "SP",
+      "przedszkole": "PRZ",
+    };
+
+    var facilities = [];
+    var sp = 0, prz = 0;
+    var detectedPowiatKey = defaultPowiatKey;
+
+    for (var i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      var cells = splitCsvLine(lines[i], sep);
+
+      var typRaw = (cells[COL.typ] || "").trim().toLowerCase();
+      var typCode = WANTED[typRaw];
+      if (!typCode) continue;
+
+      var lat = parseFloat((cells[COL.lat] || "").trim().replace(",", "."));
+      var lon = parseFloat((cells[COL.lon] || "").trim().replace(",", "."));
+      if (isNaN(lat) || isNaN(lon)) { lat = null; lon = null; }
+
+      var powiatRaw = COL.powiat !== -1 ? (cells[COL.powiat] || "").trim() : "";
+      if (!detectedPowiatKey && powiatRaw) {
+        detectedPowiatKey = Overpass.powiatKey(powiatRaw);
+      }
+
+      var miejscowosc = COL.miej !== -1 ? (cells[COL.miej] || "").trim() : "";
+      var gmina = COL.gmina !== -1 ? (cells[COL.gmina] || "").trim() : "";
+
+      /* Build address */
+      var addrParts = [];
+      if (COL.ulica !== -1 && cells[COL.ulica]) {
+        var s = cells[COL.ulica].trim();
+        var n = COL.nr !== -1 ? (cells[COL.nr] || "").trim() : "";
+        addrParts.push(n ? s + " " + n : s);
+      }
+      var kodCity = [];
+      if (COL.kod !== -1 && cells[COL.kod]) kodCity.push(cells[COL.kod].trim());
+      if (miejscowosc) kodCity.push(miejscowosc);
+      if (kodCity.length) addrParts.push(kodCity.join(" "));
+
+      var facility = {
+        rspo: COL.rspo !== -1 ? (cells[COL.rspo] || "").trim() : "",
+        nazwa: (cells[COL.nazwa] || "").trim(),
+        typ: typCode,
+        miejscowosc: miejscowosc,
+        gmina: gmina,
+        powiat: powiatRaw,
+        powiat_key: Overpass.powiatKey(powiatRaw) || detectedPowiatKey || defaultPowiatKey,
+        wojewodztwo: COL.woj !== -1 ? (cells[COL.woj] || "").trim() : "",
+        adres: addrParts.join(", "),
+        lat: lat,
+        lon: lon,
+      };
+
+      /* Filter out rows without coordinates */
+      if (facility.lat === null || facility.lon === null) continue;
+
+      facilities.push(facility);
+      if (typCode === "SP") sp++; else prz++;
+    }
+
+    return { facilities: facilities, powiatKey: detectedPowiatKey, sp: sp, prz: prz, error: null };
+  }
+
+  /**
+   * Split a single CSV line respecting quoted fields.
+   */
+  function splitCsvLine(line, sep) {
+    var result = [];
+    var cur = "";
+    var inQuote = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = !inQuote;
+      } else if (ch === sep && !inQuote) {
+        result.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    result.push(cur);
+    return result;
   }
 })();
