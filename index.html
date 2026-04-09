@@ -49,33 +49,40 @@
 
       <div class="form-row">
         <button type="submit">Szukaj</button>
-        <button type="button" id="csv-import-btn" class="btn-secondary" title="Wklej CSV z RSPO dla szybszego i pelniejszego wyniku">
-          + wklej CSV
+        <button type="button" id="csv-import-btn" class="btn-secondary" title="Zaladuj plik CSV z RSPO">
+          + CSV
         </button>
       </div>
     </form>
 
-    <!-- Modal: wklej CSV z RSPO dla wybranego powiatu -->
+    <!-- Modal: drag-and-drop / wybor pliku CSV z RSPO -->
     <div id="csv-modal" class="csv-modal" hidden>
       <div class="csv-modal__box">
         <div class="csv-modal__header">
-          <strong>Wklej CSV z RSPO</strong>
+          <strong>Zaladuj plik CSV z RSPO</strong>
           <button type="button" id="csv-modal-close" class="csv-modal__close" title="Zamknij">&times;</button>
         </div>
         <p class="csv-modal__hint">
           Pobierz CSV ze strony
           <a href="https://rspo.gov.pl/zaawansowana" target="_blank" rel="noopener">rspo.gov.pl/zaawansowana</a>
-          (filtr: Szkola podstawowa + Przedszkole, wybrany powiat), a nastepnie wklej calą zawartosc pliku ponizej.
+          (filtr: Szkola podstawowa + Przedszkole). Nastepnie przeciagnij plik na pole ponizej
+          lub kliknij aby wybrac.
         </p>
-        <textarea
-          id="csv-textarea"
-          class="csv-modal__textarea"
-          placeholder="Wklej tutaj zawartosc pliku CSV (separatorem jest srednik ;)..."
-          spellcheck="false"
-        ></textarea>
+
+        <!-- Drag-and-drop zone -->
+        <div id="csv-dropzone" class="csv-dropzone">
+          <input type="file" id="csv-file-input" accept=".csv,.txt" style="display:none" />
+          <div class="csv-dropzone__icon">&#128196;</div>
+          <div class="csv-dropzone__text">
+            <strong>Przeciagnij plik CSV tutaj</strong><br/>
+            <span>lub kliknij, aby wybrac plik z dysku</span>
+          </div>
+          <div id="csv-filename" class="csv-dropzone__filename"></div>
+        </div>
+
         <div id="csv-parse-status" class="csv-modal__parse-status"></div>
         <div class="csv-modal__actions">
-          <button type="button" id="csv-load-btn" class="csv-modal__load-btn">Zaladuj dane</button>
+          <button type="button" id="csv-load-btn" class="csv-modal__load-btn" disabled>Zaladuj dane</button>
           <button type="button" id="csv-cancel-btn" class="csv-modal__cancel-btn">Anuluj</button>
         </div>
       </div>

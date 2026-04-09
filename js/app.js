@@ -35,7 +35,9 @@
     els.csvImportBtn = document.getElementById("csv-import-btn");
     els.csvModal = document.getElementById("csv-modal");
     els.csvModalClose = document.getElementById("csv-modal-close");
-    els.csvTextarea = document.getElementById("csv-textarea");
+    els.csvDropzone = document.getElementById("csv-dropzone");
+    els.csvFileInput = document.getElementById("csv-file-input");
+    els.csvFilename = document.getElementById("csv-filename");
     els.csvParseStatus = document.getElementById("csv-parse-status");
     els.csvLoadBtn = document.getElementById("csv-load-btn");
     els.csvCancelBtn = document.getElementById("csv-cancel-btn");
@@ -48,9 +50,7 @@
     });
 
     /* CSV import modal */
-    if (els.csvImportBtn) {
-      els.csvImportBtn.addEventListener("click", openCsvModal);
-    }
+    if (els.csvImportBtn) els.csvImportBtn.addEventListener("click", openCsvModal);
     if (els.csvModalClose) els.csvModalClose.addEventListener("click", closeCsvModal);
     if (els.csvCancelBtn) els.csvCancelBtn.addEventListener("click", closeCsvModal);
     if (els.csvModal) {
@@ -59,6 +59,33 @@
       });
     }
     if (els.csvLoadBtn) els.csvLoadBtn.addEventListener("click", importCsv);
+
+    /* Drag-and-drop and file picker */
+    if (els.csvDropzone) {
+      els.csvDropzone.addEventListener("click", function () {
+        if (els.csvFileInput) els.csvFileInput.click();
+      });
+      els.csvDropzone.addEventListener("dragover", function (e) {
+        e.preventDefault();
+        els.csvDropzone.classList.add("drag-over");
+      });
+      els.csvDropzone.addEventListener("dragleave", function () {
+        els.csvDropzone.classList.remove("drag-over");
+      });
+      els.csvDropzone.addEventListener("drop", function (e) {
+        e.preventDefault();
+        els.csvDropzone.classList.remove("drag-over");
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length > 0) handleFileSelected(files[0]);
+      });
+    }
+    if (els.csvFileInput) {
+      els.csvFileInput.addEventListener("change", function () {
+        if (els.csvFileInput.files && els.csvFileInput.files.length > 0) {
+          handleFileSelected(els.csvFileInput.files[0]);
+        }
+      });
+    }
 
     /* Load local JSON (fast, offline) and async Overpass powiat list */
     loadLocalData();
@@ -469,29 +496,65 @@
    * CSV Import Modal
    * --------------------------------------------------------------------- */
 
+  /* Holds the raw text of the selected file until "Zaladuj dane" is clicked */
+  var pendingCsvText = null;
+
   function openCsvModal() {
     if (!els.csvModal) return;
-    /* Pre-fill powiat hint if user already typed something */
-    var hint = normalizePowiat(els.powiatInput.value || "");
-    if (hint && els.csvTextarea) {
-      els.csvTextarea.placeholder =
-        "Wklej tutaj zawartosc pliku CSV dla powiatu '" + hint + "' (separator: srednik ;)...";
-    }
+    pendingCsvText = null;
+    if (els.csvFilename) els.csvFilename.textContent = "";
+    if (els.csvDropzone) els.csvDropzone.classList.remove("has-file", "drag-over");
+    if (els.csvLoadBtn) els.csvLoadBtn.disabled = true;
+    if (els.csvFileInput) els.csvFileInput.value = "";
+    if (els.csvParseStatus) { els.csvParseStatus.textContent = ""; els.csvParseStatus.className = "csv-modal__parse-status"; }
     els.csvModal.removeAttribute("hidden");
-    if (els.csvParseStatus) els.csvParseStatus.textContent = "";
-    if (els.csvTextarea) els.csvTextarea.focus();
   }
 
   function closeCsvModal() {
     if (els.csvModal) els.csvModal.setAttribute("hidden", "");
-    if (els.csvTextarea) els.csvTextarea.value = "";
-    if (els.csvParseStatus) els.csvParseStatus.textContent = "";
+    pendingCsvText = null;
+    if (els.csvFilename) els.csvFilename.textContent = "";
+    if (els.csvDropzone) els.csvDropzone.classList.remove("has-file");
+    if (els.csvLoadBtn) els.csvLoadBtn.disabled = true;
+    if (els.csvFileInput) els.csvFileInput.value = "";
+    if (els.csvParseStatus) { els.csvParseStatus.textContent = ""; els.csvParseStatus.className = "csv-modal__parse-status"; }
+  }
+
+  function handleFileSelected(file) {
+    if (!file) return;
+    var name = file.name || "";
+    if (els.csvFilename) els.csvFilename.textContent = name;
+    setCsvStatus("Odczytywanie pliku...", "");
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var text = e.target.result;
+      /* Detect encoding issues — RSPO often exports in Windows-1250.
+       * If TextDecoder is available, re-read as windows-1250; otherwise proceed as-is. */
+      if (typeof TextDecoder !== "undefined" && text.indexOf("\uFFFD") !== -1) {
+        var reader2 = new FileReader();
+        reader2.onload = function (e2) {
+          var decoded = new TextDecoder("windows-1250").decode(e2.target.result);
+          setCsvStatus("Plik gotowy: " + name, "ok");
+          pendingCsvText = decoded;
+          if (els.csvDropzone) els.csvDropzone.classList.add("has-file");
+          if (els.csvLoadBtn) els.csvLoadBtn.disabled = false;
+        };
+        reader2.readAsArrayBuffer(file);
+      } else {
+        setCsvStatus("Plik gotowy: " + name, "ok");
+        pendingCsvText = text;
+        if (els.csvDropzone) els.csvDropzone.classList.add("has-file");
+        if (els.csvLoadBtn) els.csvLoadBtn.disabled = false;
+      }
+    };
+    reader.onerror = function () { setCsvStatus("Blad odczytu pliku.", "err"); };
+    reader.readAsText(file, "utf-8");
   }
 
   function importCsv() {
-    var csv = els.csvTextarea ? els.csvTextarea.value.trim() : "";
+    var csv = (pendingCsvText || "").trim();
     if (!csv) {
-      setCsvStatus("Wklej zawartosc CSV.", "err");
+      setCsvStatus("Najpierw wybierz lub upusc plik CSV.", "err");
       return;
     }
 
