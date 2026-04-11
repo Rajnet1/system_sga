@@ -169,27 +169,71 @@
     var nameRegex = "^(powiat )?" + escaped + "$";
 
     var ql =
-      "[out:json][timeout:80];" +
+      "[out:json][timeout:90];" +
       /* 1. Find the powiat admin boundary relation */
       'rel["boundary"="administrative"]["admin_level"="6"]' +
         '["name"~"' + nameRegex + '",i]->.p;' +
       /* 2. Convert to area */
       ".p map_to_area -> .a;" +
-      /* 3. Find schools and kindergartens inside */
+      /* 3. Find schools, kindergartens and community centres inside */
       "(" +
       '  node["amenity"="school"](area.a);' +
       '  way["amenity"="school"](area.a);' +
       '  node["amenity"="kindergarten"](area.a);' +
       '  way["amenity"="kindergarten"](area.a);' +
+      /* Community centres - multiple tag variants used in Poland */
+      '  node["amenity"="community_centre"](area.a);' +
+      '  way["amenity"="community_centre"](area.a);' +
+      '  node["amenity"="culture_centre"](area.a);' +
+      '  way["amenity"="culture_centre"](area.a);' +
+      '  node["building"="community_centre"](area.a);' +
+      '  way["building"="community_centre"](area.a);' +
+      '  node["building"="culture_centre"](area.a);' +
+      '  way["building"="culture_centre"](area.a);' +
+      '  node["leisure"="community_centre"](area.a);' +
+      '  way["leisure"="community_centre"](area.a);' +
+      '  node["leisure"="culture_centre"](area.a);' +
+      '  way["leisure"="culture_centre"](area.a);' +
+      /* Polish cultural centres - often tagged as "centre" or with "club" */
+      '  node["amenity"~"centre|center"](area.a);' +
+      '  way["amenity"~"centre|center"](area.a);' +
+      '  node["club"](area.a);' +
+      '  way["club"](area.a);' +
       ");" +
       "out center tags;";
 
     overpassQuery(ql)
       .then(function (data) {
+        console.log("Raw Overpass response for " + key + ":", {
+          totalElements: data.elements.length,
+          sampleElements: data.elements.slice(0, 5).map(function(e) {
+            return {
+              type: e.type,
+              id: e.id,
+              amenity: e.tags?.amenity,
+              building: e.tags?.building,
+              leisure: e.tags?.leisure,
+              name: e.tags?.name
+            };
+          })
+        });
+
         var facilities = parseElements(data.elements, key);
         if (facilities.length > 0) {
           cacheSet(PREFIX_FAC + key, facilities);
         }
+        console.log("Overpass results for " + key + ":", {
+          totalElements: data.elements.length,
+          facilities: facilities.length,
+          byType: {
+            SP: facilities.filter(function(f) { return f.typ === "SP"; }).length,
+            PRZ: facilities.filter(function(f) { return f.typ === "PRZ"; }).length,
+            DK: facilities.filter(function(f) { return f.typ === "DK"; }).length
+          },
+          sampleDK: facilities.filter(function(f) { return f.typ === "DK"; }).slice(0, 3).map(function(f) {
+            return { nazwa: f.nazwa, tags: data.elements.find(function(e) { return String(e.id) === f.rspo; })?.tags };
+          })
+        });
         callback(null, facilities);
       })
       .catch(function (err) { callback(err, null); });
@@ -207,6 +251,11 @@
   var DEFAULT_UCZNIOWIE_PRZ = 100;
 
   function extractUczniowie(tags, typ) {
+    /* Community centres don't have students */
+    if (typ === "DK") {
+      return 0;
+    }
+
     /* OSM sometimes exposes a `capacity`, `capacity:students`, or
      * `capacity:pupils` tag — prefer those when present. */
     var candidates = [
@@ -225,25 +274,71 @@
   }
 
   function parseElements(elements, key) {
+    /* Debug: log all community_centre elements */
+    var communityCentres = elements.filter(function (e) {
+      return e.tags && (
+        e.tags.amenity === "community_centre" ||
+        e.tags.building === "community_centre" ||
+        e.tags.leisure === "community_centre"
+      );
+    });
+    if (communityCentres.length > 0) {
+      console.log("Found community_centre elements:", communityCentres.length, communityCentres.slice(0, 3).map(function (e) {
+        return { id: e.id, name: e.tags.name, amenity: e.tags.amenity, building: e.tags.building, leisure: e.tags.leisure };
+      }));
+    }
+
     return elements
       .filter(function (e) {
-        return e.tags && (e.tags.amenity === "school" || e.tags.amenity === "kindergarten");
+        if (!e.tags) return false;
+        /* Schools and kindergartens */
+        if (e.tags.amenity === "school" || e.tags.amenity === "kindergarten") return true;
+        /* Community & cultural centres - multiple tag variants */
+        if (e.tags.amenity === "community_centre" ||
+            e.tags.amenity === "culture_centre" ||
+            e.tags.building === "community_centre" ||
+            e.tags.building === "culture_centre" ||
+            e.tags.leisure === "community_centre" ||
+            e.tags.leisure === "culture_centre" ||
+            (e.tags.amenity && /centre|center/i.test(e.tags.amenity)) ||
+            e.tags.club) {
+          return true;
+        }
+        return false;
       })
       .map(function (e) {
         var lat = e.lat != null ? e.lat : (e.center ? e.center.lat : null);
         var lon = e.lon != null ? e.lon : (e.center ? e.center.lon : null);
         if (lat == null || lon == null) return null;
 
-        var typ = e.tags.amenity === "school" ? "SP" : "PRZ";
+        var typ;
+        var nameTag = e.tags.name || e.tags["name:pl"] || "";
         var city = e.tags["addr:city"] || e.tags["addr:place"] || e.tags["is_in:city"] || "";
-        var nazwa = e.tags.name || e.tags["name:pl"] || "";
+
+        /* Determine facility type based on tags */
+        if (e.tags.amenity === "school") {
+          typ = "SP";
+        } else if (e.tags.amenity === "kindergarten") {
+          typ = "PRZ";
+        } else if (e.tags.amenity === "community_centre" ||
+                   e.tags.amenity === "culture_centre" ||
+                   e.tags.building === "community_centre" ||
+                   e.tags.building === "culture_centre" ||
+                   e.tags.leisure === "community_centre" ||
+                   e.tags.leisure === "culture_centre" ||
+                   (e.tags.amenity && /centre|center/i.test(e.tags.amenity)) ||
+                   e.tags.club) {
+          typ = "DK";
+        } else {
+          return null;
+        }
 
         /* Skip facilities without a name */
-        if (!nazwa || nazwa.trim().length === 0) return null;
+        if (!nameTag || nameTag.trim().length === 0) return null;
 
         return {
           rspo: String(e.id),
-          nazwa: nazwa,
+          nazwa: nameTag,
           typ: typ,
           miejscowosc: city,
           gmina: e.tags["is_in:county"] || "",

@@ -423,6 +423,11 @@ body {
   color: #2e7d32;
 }
 
+.facility-list .type-badge.DK {
+  background: #fef3c7;
+  color: #d97706;
+}
+
 .facility-list .facility-name {
   font-weight: 500;
 }

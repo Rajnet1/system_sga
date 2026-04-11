@@ -35,6 +35,16 @@
   }
 
   function facilityIcon(typ) {
+    if (typ === "DK") {
+      /* Community centre - star icon */
+      return L.divIcon({
+        className: "facility-marker",
+        html:
+          '<div style="color:#d97706;font-size:16px;font-weight:bold;text-shadow:0 0 2px rgba(255,255,255,0.8),0 0 4px rgba(0,0,0,0.3);">★</div>',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      });
+    }
     var color = typ === "SP" ? "#1565c0" : "#2e7d32";
     return L.divIcon({
       className: "facility-marker",
@@ -68,7 +78,7 @@
       if (f.lat == null || f.lon == null) return;
 
       var marker = L.marker([f.lat, f.lon], { icon: facilityIcon(f.typ) });
-      var typLabel = f.typ === "SP" ? "Szkola podstawowa" : "Przedszkole";
+      var typLabel = f.typ === "SP" ? "Szkoła podstawowa" : (f.typ === "PRZ" ? "Przedszkole" : "Dom kultury");
       marker.bindPopup(
         '<strong>' +
           escapeHtml(f.nazwa) +

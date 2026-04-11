@@ -27,6 +27,7 @@
   /**
    * Simple arithmetic mean of lat/lon. Good enough for facility clusters at
    * the scale of a single Polish powiat (tens of km across).
+   * Returns null if no valid points with coordinates.
    */
   function centroid(points) {
     if (!points || points.length === 0) {
@@ -34,13 +35,21 @@
     }
     var latSum = 0;
     var lonSum = 0;
+    var count = 0;
     for (var i = 0; i < points.length; i++) {
-      latSum += points[i].lat;
-      lonSum += points[i].lon;
+      var p = points[i];
+      if (p.lat != null && p.lon != null && !isNaN(p.lat) && !isNaN(p.lon)) {
+        latSum += p.lat;
+        lonSum += p.lon;
+        count++;
+      }
+    }
+    if (count === 0) {
+      return null;
     }
     return {
-      lat: latSum / points.length,
-      lon: lonSum / points.length,
+      lat: latSum / count,
+      lon: lonSum / count,
     };
   }
 

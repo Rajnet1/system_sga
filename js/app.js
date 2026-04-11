@@ -411,9 +411,17 @@
     Object.keys(groups).forEach(function (k) {
       var g = groups[k];
       var center = Geo.centroid(g.members);
+
+      /* Skip groups without any coordinates - can't compute radius */
+      if (!center) {
+        console.log("Skipping group without coordinates:", g.name);
+        return;
+      }
+
       var inRadius = [];
       var sp = 0;
       var prz = 0;
+      var dk = 0;
       var uczniowieTotal = 0;
       var uczniowieSp = 0;
       var uczniowiePrz = 0;
@@ -428,6 +436,7 @@
           inRadius.push(f);
           if (f.typ === "SP") sp++;
           else if (f.typ === "PRZ") prz++;
+          else if (f.typ === "DK") dk++;
 
           uczniowieTotal += f.uczniowie || 0;
           if (f.typ === "SP") uczniowieSp += f.uczniowie || 0;
@@ -442,6 +451,7 @@
         total: inRadius.length,
         sp: sp,
         prz: prz,
+        dk: dk,
         uczniowieTotal: uczniowieTotal,
         uczniowieSp: uczniowieSp,
         uczniowiePrz: uczniowiePrz,
@@ -494,6 +504,7 @@
           '<span class="uczniowie-prz">' + city.uczniowiePrz + " ucz. PRZ</span> &middot; " +
           '<span style="color:#7b8794;">' + city.sp + ' SP</span> &middot; ' +
           '<span style="color:#7b8794;">' + city.prz + ' PRZ</span>' +
+          (city.dk > 0 ? ' &middot; <span style="color:#d97706;">' + city.dk + ' DK</span>' : '') +
         "</div>" +
         "</div>" +
         '<div class="city-card__count">' + city.uczniowieTotal + " ucz.</div>";
@@ -522,14 +533,22 @@
       return ul;
     }
     var sorted = facilities.slice().sort(function (a, b) {
-      if (a.typ !== b.typ) return a.typ === "SP" ? -1 : 1;
+      if (a.typ !== b.typ) {
+        if (a.typ === "SP") return -1;
+        if (b.typ === "SP") return 1;
+        if (a.typ === "PRZ") return -1;
+        if (b.typ === "PRZ") return 1;
+        return 0;
+      }
       return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
     });
     sorted.forEach(function (f) {
       var li = document.createElement("li");
       var badge = document.createElement("span");
       badge.className = "type-badge " + f.typ;
-      badge.textContent = f.typ === "SP" ? "SP" : "PRZ";
+      if (f.typ === "SP") badge.textContent = "SP";
+      else if (f.typ === "PRZ") badge.textContent = "PRZ";
+      else if (f.typ === "DK") badge.textContent = "DK";
       li.appendChild(badge);
       var wrap = document.createElement("div");
       var name = document.createElement("span");
@@ -869,10 +888,12 @@
       /* Direct match with polish chars */
       "szkoła podstawowa": "SP",
       "przedszkole": "PRZ",
+      "dom kultury": "DK",
       /* After NFD normalization (polish chars removed) */
       "szkola podstawowa": "SP",
       "przedszkole": "PRZ",
       "przedszkole publiczne": "PRZ",
+      "dom kultury ": "DK",
       "szkola": "SP",
       "publiczna szkola podstawowa": "SP",
       "publiczne przedszkole": "PRZ",
@@ -920,6 +941,8 @@
           typCode = "SP";
         } else if (typNormalized.indexOf("przedszkole") !== -1) {
           typCode = "PRZ";
+        } else if (typNormalized.indexOf("dom") !== -1 && typNormalized.indexOf("kultury") !== -1) {
+          typCode = "DK";
         } else {
           /* Track unknown types for debugging - show both original and normalized */
           var debugKey = typRaw + " -> " + typNormalized;
