@@ -84,7 +84,8 @@ body {
   font-weight: 600;
 }
 
-.field input {
+.field input,
+.field select {
   padding: 9px 11px;
   font-size: 14px;
   border: 1px solid #cbd2d9;
@@ -93,7 +94,8 @@ body {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.field input:focus {
+.field input:focus,
+.field select:focus {
   outline: none;
   border-color: #2b6cb0;
   box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);

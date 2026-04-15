@@ -28,6 +28,10 @@
   function clear() {
     if (facilityLayer) facilityLayer.clearLayers();
     if (cityLayer) cityLayer.clearLayers();
+    clearRadius();
+  }
+
+  function clearRadius() {
     if (radiusCircle) {
       map.removeLayer(radiusCircle);
       radiusCircle = null;
@@ -72,13 +76,16 @@
 
   function plotFacilities(facilities) {
     facilityLayer.clearLayers();
-    var bounds = [];
     facilities.forEach(function (f) {
       /* Skip facilities without coordinates */
       if (f.lat == null || f.lon == null) return;
 
       var marker = L.marker([f.lat, f.lon], { icon: facilityIcon(f.typ) });
       var typLabel = f.typ === "SP" ? "Szkoła podstawowa" : (f.typ === "PRZ" ? "Przedszkole" : "Dom kultury");
+      var approxNote =
+        f.coords_source === "place_center"
+          ? '<br/><span style="color:#b45309;font-size:11px;">Lokalizacja przyblizona (srodek miejscowosci)</span>'
+          : "";
       marker.bindPopup(
         '<strong>' +
           escapeHtml(f.nazwa) +
@@ -86,14 +93,23 @@
           '<em style="color:#52606d;">' +
           typLabel +
           "</em><br/>" +
-          escapeHtml(f.adres || f.miejscowosc || "")
+          escapeHtml(f.adres || f.miejscowosc || "") +
+          approxNote
       );
       marker.addTo(facilityLayer);
-      bounds.push([f.lat, f.lon]);
     });
-    if (bounds.length > 0) {
-      map.fitBounds(bounds, { padding: [30, 30] });
-    }
+    fitToFacilities(facilities);
+  }
+
+  function fitToFacilities(facilities) {
+    if (!map || !facilities || facilities.length === 0) return;
+    var bounds = [];
+    facilities.forEach(function (f) {
+      if (f && f.lat != null && f.lon != null) {
+        bounds.push([f.lat, f.lon]);
+      }
+    });
+    if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30] });
   }
 
   function plotCityCenters(cities, onClick) {
@@ -111,7 +127,9 @@
           city.sp +
           " SP + " +
           city.prz +
-          " PRZ)",
+          " PRZ" +
+          (city.dk > 0 ? " + " + city.dk + " DK" : "") +
+          ")",
         { direction: "top" }
       );
       marker.on("click", function () {
@@ -124,10 +142,7 @@
   }
 
   function drawRadius(center, radiusKm) {
-    if (radiusCircle) {
-      map.removeLayer(radiusCircle);
-      radiusCircle = null;
-    }
+    clearRadius();
     radiusCircle = L.circle([center.lat, center.lon], {
       radius: radiusKm * 1000,
       color: "#d97706",
@@ -157,7 +172,9 @@
     initMap: initMap,
     clear: clear,
     plotFacilities: plotFacilities,
+    fitToFacilities: fitToFacilities,
     plotCityCenters: plotCityCenters,
+    clearRadius: clearRadius,
     drawRadius: drawRadius,
     focusOn: focusOn,
   };

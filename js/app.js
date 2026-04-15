@@ -17,10 +17,19 @@
     powiatKeys: [],       /* sorted unique powiat keys (local) */
     datalistKeys: new Set(), /* all known powiat keys for datalist */
     currentCities: [],    /* ranking for last search */
+    currentMappedFacilities: [], /* last rendered facilities with coordinates */
     currentRadiusKm: 5,
+    analysisMode: "cities", /* cities | county */
     activeCityKey: null,
     searching: false,
   };
+
+  var GEO_CACHE_PREFIX = "geocode_v1_";
+  var GEO_CACHE_HIT_TTL = 180 * 86400 * 1000; /* 180 days */
+  var GEO_CACHE_MISS_TTL = 14 * 86400 * 1000; /* 14 days */
+  var GEO_DELAY_MS = 1100; /* Nominatim-friendly pacing */
+  var GEO_TIMEOUT_MS = 15000;
+  var GEO_MAX_PER_RUN = 250;
 
   var els = {};
 
@@ -28,6 +37,7 @@
     els.form = document.getElementById("search-form");
     els.powiatInput = document.getElementById("powiat-input");
     els.radiusInput = document.getElementById("radius-input");
+    els.modeSelect = document.getElementById("mode-select");
     els.powiatList = document.getElementById("powiat-list");
     els.status = document.getElementById("status");
     els.results = document.getElementById("results");
@@ -171,6 +181,30 @@
     state.powiatKeys = Object.keys(byPowiat).sort();
   }
 
+  function hasCoords(facility) {
+    return facility && facility.lat != null && facility.lon != null;
+  }
+
+  function countMissingCoords(facilities) {
+    var missing = 0;
+    for (var i = 0; i < facilities.length; i++) {
+      if (!hasCoords(facilities[i])) missing++;
+    }
+    return missing;
+  }
+
+  function groupFacilitiesByPowiat(facilities, fallbackKey) {
+    var grouped = {};
+    for (var i = 0; i < facilities.length; i++) {
+      var f = facilities[i];
+      var key = Overpass.powiatKey(f.powiat_key || f.powiat || "") || fallbackKey;
+      if (!key) continue;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(f);
+    }
+    return grouped;
+  }
+
   function mergeIntoDatalist(keys) {
     keys.forEach(function (k) { state.datalistKeys.add(k); });
     rebuildDatalist();
@@ -202,6 +236,8 @@
     var rawPowiat = els.powiatInput.value;
     var powiatKey = normalizePowiat(rawPowiat);
     var radiusKm = parseFloat(els.radiusInput.value);
+    var mode = els.modeSelect ? els.modeSelect.value : "cities";
+    if (mode !== "cities" && mode !== "county") mode = "cities";
 
     if (!powiatKey) {
       setStatus("Wpisz nazwę powiatu.", true);
@@ -213,6 +249,7 @@
     }
 
     state.currentRadiusKm = radiusKm;
+    state.analysisMode = mode;
 
     /* If we have local data for this powiat, use it immediately.
      * BUT: if none of the local facilities have coordinates (e.g. CSV import
@@ -220,37 +257,84 @@
      * so schools can be plotted on the map. */
     var localFacilities = state.byPowiat[powiatKey];
     if (localFacilities && localFacilities.length > 0) {
-      var withCoords = 0;
-      for (var i = 0; i < localFacilities.length; i++) {
-        if (localFacilities[i].lat != null && localFacilities[i].lon != null) withCoords++;
-      }
-      if (withCoords > 0) {
-        processAndRender(localFacilities, powiatKey, radiusKm, "lokalna baza RSPO");
-        return;
-      }
+      sanitizeFacilitiesAgainstPowiatBounds(localFacilities, powiatKey, function (_bounds, invalidated) {
+        var withCoords = 0;
+        var withoutCoords = 0;
+        for (var i = 0; i < localFacilities.length; i++) {
+          if (hasCoords(localFacilities[i])) withCoords++;
+          else withoutCoords++;
+        }
 
-      /* Local data exists but has no coordinates — enrich with Overpass geo */
-      setLoading(true);
-      setStatus("Placowki z CSV bez wspolrzednych - pobieram pozycje z OpenStreetMap...");
-      els.results.innerHTML = "";
-      MapLayer.clear();
-
-      Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
-        setLoading(false);
-        if (err || !osmFacilities || osmFacilities.length === 0) {
-          /* Fallback: still render ranking without map markers */
-          setStatus(
-            "Brak wspolrzednych w CSV i nie mozna pobrac z OSM (" +
-              (err ? err.message : "brak wynikow") +
-              "). Wyswietlam ranking bez mapy.",
-            true
-          );
-          processAndRender(localFacilities, powiatKey, radiusKm, "CSV (bez wspolrzednych)");
+        if (withoutCoords === 0) {
+          var localSource = "lokalna baza RSPO";
+          if (invalidated > 0) localSource += " (skorygowano " + invalidated + " poza granica powiatu)";
+          processAndRender(localFacilities, powiatKey, radiusKm, localSource);
           return;
         }
-        var merged = mergeCoordsByName(localFacilities, osmFacilities);
-        state.byPowiat[powiatKey] = merged;
-        processAndRender(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (wspolrzedne)");
+
+        /* Local data is partially/fully without coordinates — enrich from OSM. */
+        setLoading(true);
+        setStatus("Uzupelniam brakujace wspolrzedne z OpenStreetMap...");
+        els.results.innerHTML = "";
+        MapLayer.clear();
+
+        Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
+          if (err || !osmFacilities || osmFacilities.length === 0) {
+            /* Fallback: geocode addresses from CSV directly. */
+            setStatus(
+              "OpenStreetMap nie zwrocil danych (" +
+                (err ? err.message : "brak wynikow") +
+                "). Geokoduje adresy z CSV..."
+            );
+            enrichMissingCoordsFromNominatim(localFacilities, powiatKey, function (enriched, geoMeta) {
+              fillMissingFromPlaceCenters(enriched, powiatKey, function (finalFacilities, placeMeta) {
+                setLoading(false);
+                state.byPowiat[powiatKey] = finalFacilities;
+                var sourceFallback = withCoords > 0
+                  ? "lokalna baza RSPO + geokodowanie adresow"
+                  : "CSV + geokodowanie adresow";
+                if (geoMeta && geoMeta.requested > 0) {
+                  sourceFallback += " (" + geoMeta.resolved + "/" + geoMeta.requested + " uzupelnionych)";
+                }
+                if (placeMeta && placeMeta.resolved > 0) {
+                  sourceFallback += " + miejscowosci OSM (" + placeMeta.resolved + ")";
+                }
+                processAndRender(finalFacilities, powiatKey, radiusKm, sourceFallback);
+              });
+            });
+            return;
+          }
+
+          var merged = mergeCoordsByName(localFacilities, osmFacilities);
+          var missingAfterMerge = countMissingCoords(merged);
+          if (missingAfterMerge === 0) {
+            setLoading(false);
+            state.byPowiat[powiatKey] = merged;
+            processAndRender(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (uzupelnione wspolrzedne)");
+            return;
+          }
+
+          setStatus(
+            "Dopasowano czesc placowek w OSM. Geokoduje pozostale adresy z CSV (" +
+              missingAfterMerge +
+              ")..."
+          );
+
+          enrichMissingCoordsFromNominatim(merged, powiatKey, function (enrichedMerged, geoMeta2) {
+            fillMissingFromPlaceCenters(enrichedMerged, powiatKey, function (finalMerged, placeMeta2) {
+              setLoading(false);
+              state.byPowiat[powiatKey] = finalMerged;
+              var source = "CSV + OpenStreetMap + geokodowanie adresow";
+              if (geoMeta2 && geoMeta2.requested > 0) {
+                source += " (" + geoMeta2.resolved + "/" + geoMeta2.requested + " uzupelnionych)";
+              }
+              if (placeMeta2 && placeMeta2.resolved > 0) {
+                source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
+              }
+              processAndRender(finalMerged, powiatKey, radiusKm, source);
+            });
+          });
+        });
       });
       return;
     }
@@ -314,6 +398,504 @@
       .trim();
   }
 
+  function normAddrKey(s) {
+    return (s || "")
+      .toLowerCase()
+      .replace(/[\u0105\u0104]/g, "a")
+      .replace(/[\u0107\u0106]/g, "c")
+      .replace(/[\u0119\u0118]/g, "e")
+      .replace(/[\u0142\u0141]/g, "l")
+      .replace(/[\u0144\u0143]/g, "n")
+      .replace(/[\u00F3\u00D3]/g, "o")
+      .replace(/[\u015B\u015A]/g, "s")
+      .replace(/[\u017A\u0179]/g, "z")
+      .replace(/[\u017C\u017B]/g, "z")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function placeNameKey(s) {
+    return normAddrKey(s)
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function uniqueNonEmptyParts(parts) {
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var raw = parts[i] == null ? "" : String(parts[i]).trim();
+      if (!raw) continue;
+      var key = placeNameKey(raw);
+      if (!key || seen[key]) continue;
+      seen[key] = true;
+      out.push(raw);
+    }
+    return out;
+  }
+
+  function powiatLabel(raw) {
+    var value = (raw || "").trim();
+    if (!value) return "";
+    if (/^powiat\s+/i.test(value)) return value;
+    return "powiat " + value;
+  }
+
+  function cleanStreetForGeocode(street) {
+    return (street || "")
+      .replace(/^ul\.?\s+/i, "")
+      .replace(/^aleja\s+/i, "")
+      .replace(/^al\.?\s+/i, "")
+      .replace(/^plac\s+/i, "")
+      .replace(/^pl\.?\s+/i, "")
+      .replace(/^os\.?\s+/i, "")
+      .replace(/^osiedle\s+/i, "")
+      .trim();
+  }
+
+  function parseAddressParts(addr) {
+    var source = (addr || "").trim();
+    if (!source) return { street: "", city: "" };
+    var chunks = source.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    var street = chunks.length > 0 ? cleanStreetForGeocode(chunks[0]) : "";
+    var city = "";
+    if (chunks.length > 1) {
+      city = chunks[1]
+        .replace(/\b\d{2}-\d{3}\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+    return { street: street, city: city };
+  }
+
+  function buildGeocodeQueries(facility, powiatKey) {
+    var pLabel = powiatLabel(facility.powiat || powiatKey);
+    var locality = (facility.miejscowosc || "").trim();
+    var gmina = (facility.gmina || "").trim();
+    var parsedAddr = parseAddressParts(facility.adres || "");
+    var city = locality || parsedAddr.city || gmina;
+
+    var queries = [];
+    var candidates = [
+      [parsedAddr.street, city],
+      [parsedAddr.street, city, "Polska"],
+      [facility.adres, city],
+      [facility.adres, locality, gmina],
+      [facility.nazwa, city],
+      [facility.nazwa, city, pLabel],
+      [facility.nazwa, locality || gmina, pLabel, "Polska"],
+      [facility.adres, locality, gmina, pLabel, "Polska"],
+    ];
+
+    for (var i = 0; i < candidates.length; i++) {
+      var parts = uniqueNonEmptyParts(candidates[i]);
+      if (parts.length === 0) continue;
+      var q = parts.join(", ");
+      var qKey = placeNameKey(q);
+      var exists = false;
+      for (var j = 0; j < queries.length; j++) {
+        if (placeNameKey(queries[j]) === qKey) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) queries.push(q);
+      if (queries.length >= 4) break;
+    }
+    return queries;
+  }
+
+  function simpleHash(text) {
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function geocodeScopeKey(powiatKey, bounds) {
+    var scope = String(powiatKey || "").trim();
+    if (!bounds) return scope;
+    return (
+      scope +
+      "|" +
+      [
+        Number(bounds.minlat || 0).toFixed(3),
+        Number(bounds.minlon || 0).toFixed(3),
+        Number(bounds.maxlat || 0).toFixed(3),
+        Number(bounds.maxlon || 0).toFixed(3),
+      ].join(",")
+    );
+  }
+
+  function geocodeCacheKey(query, scopeKey) {
+    var normalized = placeNameKey(query);
+    if (!normalized) return "";
+    return GEO_CACHE_PREFIX + simpleHash((scopeKey || "") + "|" + normalized);
+  }
+
+  function geocodeCacheGet(query, scopeKey) {
+    var key = geocodeCacheKey(query, scopeKey);
+    if (!key) return null;
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      if (!obj || !obj.status || !obj.ts) return null;
+      var ttl = obj.status === "ok" ? GEO_CACHE_HIT_TTL : GEO_CACHE_MISS_TTL;
+      if (Date.now() - obj.ts > ttl) return null;
+      return obj;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function geocodeCacheSet(query, scopeKey, status, coords) {
+    var key = geocodeCacheKey(query, scopeKey);
+    if (!key) return;
+    try {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ts: Date.now(),
+          status: status,
+          lat: coords && coords.lat != null ? coords.lat : null,
+          lon: coords && coords.lon != null ? coords.lon : null,
+        })
+      );
+    } catch (e) {
+      /* ignore localStorage errors */
+    }
+  }
+
+  function isInsideBounds(lat, lon, bounds) {
+    if (!bounds) return true;
+    var margin = 0.005; /* ~0.5 km margin for boundary precision */
+    return (
+      lat >= (bounds.minlat - margin) &&
+      lat <= (bounds.maxlat + margin) &&
+      lon >= (bounds.minlon - margin) &&
+      lon <= (bounds.maxlon + margin)
+    );
+  }
+
+  function sanitizeFacilitiesAgainstPowiatBounds(facilities, powiatKey, callback) {
+    if (typeof callback !== "function") callback = function () {};
+    if (!Array.isArray(facilities) || facilities.length === 0) {
+      callback(null, 0);
+      return;
+    }
+    if (typeof Overpass.fetchPowiatBounds !== "function") {
+      callback(null, 0);
+      return;
+    }
+
+    Overpass.fetchPowiatBounds(powiatKey, function (err, bounds) {
+      if (err || !bounds) {
+        if (err) console.warn("Nie udalo sie pobrac granic do walidacji punktow:", err.message);
+        callback(bounds || null, 0);
+        return;
+      }
+
+      var invalidated = 0;
+      for (var i = 0; i < facilities.length; i++) {
+        var f = facilities[i];
+        if (!hasCoords(f)) continue;
+        if (!isInsideBounds(f.lat, f.lon, bounds)) {
+          f.lat = null;
+          f.lon = null;
+          invalidated++;
+        }
+      }
+      callback(bounds, invalidated);
+    });
+  }
+
+  function geocodeQueryNominatim(query, options, callback) {
+    options = options || {};
+    var scopeKey = geocodeScopeKey(options.powiatKey, options.bounds);
+    var cached = geocodeCacheGet(query, scopeKey);
+    if (cached) {
+      if (cached.status === "ok" && cached.lat != null && cached.lon != null) {
+        if (isInsideBounds(cached.lat, cached.lon, options.bounds)) {
+          callback(null, { coords: { lat: cached.lat, lon: cached.lon }, fromCache: true });
+          return;
+        }
+      }
+      callback(null, { coords: null, fromCache: true });
+      return;
+    }
+
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = null;
+    var url =
+      "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=pl&addressdetails=0&accept-language=pl&q=" +
+      encodeURIComponent(query);
+
+    if (options.bounds) {
+      var viewbox = [
+        options.bounds.minlon,
+        options.bounds.maxlat,
+        options.bounds.maxlon,
+        options.bounds.minlat,
+      ].join(",");
+      url += "&viewbox=" + encodeURIComponent(viewbox) + "&bounded=1";
+    }
+
+    fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller ? controller.signal : undefined,
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rows) {
+        if (Array.isArray(rows) && rows.length > 0) {
+          var lat = parseFloat(rows[0].lat);
+          var lon = parseFloat(rows[0].lon);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            var coords = {
+              lat: Math.round(lat * 1e6) / 1e6,
+              lon: Math.round(lon * 1e6) / 1e6,
+            };
+            if (isInsideBounds(coords.lat, coords.lon, options.bounds)) {
+              geocodeCacheSet(query, scopeKey, "ok", coords);
+              callback(null, { coords: coords, fromCache: false });
+              return;
+            }
+          }
+        }
+        geocodeCacheSet(query, scopeKey, "miss", null);
+        callback(null, { coords: null, fromCache: false });
+      })
+      .catch(function (err) {
+        callback(err, { coords: null, fromCache: false });
+      })
+      .finally(function () {
+        if (timer) clearTimeout(timer);
+      });
+
+    if (controller) {
+      timer = setTimeout(function () {
+        controller.abort();
+      }, GEO_TIMEOUT_MS);
+    }
+  }
+
+  function geocodeFacility(facility, powiatKey, powiatBounds, callback) {
+    var queries = buildGeocodeQueries(facility, powiatKey);
+    if (queries.length === 0) {
+      callback(null, { coords: null, fromCacheOnly: true });
+      return;
+    }
+
+    var idx = 0;
+    var usedNetwork = false;
+
+    function next() {
+      if (idx >= queries.length) {
+        callback(null, { coords: null, fromCacheOnly: !usedNetwork });
+        return;
+      }
+      var query = queries[idx++];
+      geocodeQueryNominatim(query, { powiatKey: powiatKey, bounds: powiatBounds }, function (err, result) {
+        if (result && !result.fromCache) usedNetwork = true;
+        if (result && result.coords) {
+          callback(null, { coords: result.coords, fromCacheOnly: !usedNetwork });
+          return;
+        }
+        if (err) {
+          console.warn("Geokodowanie nieudane dla zapytania:", query, err.message);
+        }
+        next();
+      });
+    }
+
+    next();
+  }
+
+  function enrichMissingCoordsFromNominatim(facilities, powiatKey, callback) {
+    var missingIdx = [];
+    for (var i = 0; i < facilities.length; i++) {
+      if (!hasCoords(facilities[i]) && facilities[i] && facilities[i].nazwa) {
+        missingIdx.push(i);
+      }
+    }
+
+    if (missingIdx.length === 0) {
+      callback(facilities, {
+        requested: 0,
+        resolved: 0,
+        unresolved: 0,
+        remainingMissing: 0,
+      });
+      return;
+    }
+
+    function runGeocoding(powiatBounds) {
+      var queue = missingIdx.slice(0, GEO_MAX_PER_RUN);
+      var requested = queue.length;
+      var resolved = 0;
+      var unresolved = 0;
+      var done = 0;
+
+      function step() {
+        if (queue.length === 0) {
+          var remainingMissing = countMissingCoords(facilities);
+          callback(facilities, {
+            requested: requested,
+            resolved: resolved,
+            unresolved: unresolved,
+            remainingMissing: remainingMissing,
+          });
+          return;
+        }
+
+        var idx = queue.shift();
+        var facility = facilities[idx];
+        geocodeFacility(facility, powiatKey, powiatBounds, function (_err, result) {
+          done++;
+        if (result && result.coords) {
+          facility.lat = result.coords.lat;
+          facility.lon = result.coords.lon;
+          facility.coords_source = "geocode";
+          resolved++;
+        } else {
+          unresolved++;
+          }
+
+          if (done % 5 === 0 || done === requested) {
+            setStatus(
+              "Geokodowanie adresow z CSV: " +
+                done +
+                "/" +
+                requested +
+                " (uzupelniono " +
+                resolved +
+                ")..."
+            );
+          }
+
+          setTimeout(step, result && result.fromCacheOnly ? 0 : GEO_DELAY_MS);
+        });
+      }
+
+      step();
+    }
+
+    if (typeof Overpass.fetchPowiatBounds !== "function") {
+      runGeocoding(null);
+      return;
+    }
+
+    Overpass.fetchPowiatBounds(powiatKey, function (boundsErr, bounds) {
+      if (boundsErr) {
+        console.warn("Nie udalo sie pobrac granic powiatu do geokodowania:", boundsErr.message);
+      }
+      runGeocoding(bounds || null);
+    });
+  }
+
+  function fillMissingFromPlaceCenters(facilities, powiatKey, callback) {
+    if (typeof callback !== "function") callback = function () {};
+
+    var missingIdx = [];
+    for (var i = 0; i < facilities.length; i++) {
+      if (!hasCoords(facilities[i]) && facilities[i] && facilities[i].nazwa) {
+        missingIdx.push(i);
+      }
+    }
+
+    if (missingIdx.length === 0) {
+      callback(facilities, {
+        requested: 0,
+        resolved: 0,
+        remainingMissing: 0,
+      });
+      return;
+    }
+
+    if (typeof Overpass.fetchPlaceCenters !== "function") {
+      callback(facilities, {
+        requested: missingIdx.length,
+        resolved: 0,
+        remainingMissing: countMissingCoords(facilities),
+      });
+      return;
+    }
+
+    setStatus("Uzupelniam pozostale punkty ze srodkow miejscowosci OSM...");
+    Overpass.fetchPlaceCenters(powiatKey, function (err, places) {
+      if (err || !Array.isArray(places) || places.length === 0) {
+        callback(facilities, {
+          requested: missingIdx.length,
+          resolved: 0,
+          remainingMissing: countMissingCoords(facilities),
+        });
+        return;
+      }
+
+      var byKey = {};
+      for (var p = 0; p < places.length; p++) {
+        var place = places[p];
+        if (!place || !place.key) continue;
+        if (!byKey[place.key]) byKey[place.key] = place;
+      }
+
+      var resolved = 0;
+      for (var m = 0; m < missingIdx.length; m++) {
+        var idx = missingIdx[m];
+        var f = facilities[idx];
+        var keys = [
+          placeNameKey(f.miejscowosc || ""),
+          placeNameKey(f.gmina || ""),
+        ];
+        var chosen = null;
+        for (var k = 0; k < keys.length; k++) {
+          if (!keys[k]) continue;
+          if (byKey[keys[k]]) {
+            chosen = byKey[keys[k]];
+            break;
+          }
+        }
+        if (!chosen) continue;
+
+        f.lat = chosen.lat;
+        f.lon = chosen.lon;
+        f.coords_source = "place_center";
+        resolved++;
+      }
+
+      callback(facilities, {
+        requested: missingIdx.length,
+        resolved: resolved,
+        remainingMissing: countMissingCoords(facilities),
+      });
+    });
+  }
+
+  function safeStudentCount(facility) {
+    if (!facility) return 0;
+    var n = parseInt(facility.uczniowie, 10);
+    return isNaN(n) || n < 0 ? 0 : n;
+  }
+
+  function streetToken(facility) {
+    var addr = (facility && facility.adres) ? String(facility.adres) : "";
+    if (!addr) return "";
+    var first = addr.split(",")[0];
+    return normAddrKey(first)
+      .replace(/^ul\.?\s+/i, "")
+      .replace(/^aleja\s+/i, "")
+      .replace(/^al\.?\s+/i, "")
+      .replace(/^plac\s+/i, "")
+      .trim();
+  }
+
   /**
    * Merge coordinates from OSM facilities into local facilities by matching
    * normalised names (with miejscowosc as tiebreaker). Any local facility
@@ -323,7 +905,7 @@
   function mergeCoordsByName(local, osm) {
     var byName = {};
     osm.forEach(function (o) {
-      if (o.lat == null || o.lon == null) return;
+      if (!hasCoords(o)) return;
       var key = normName(o.nazwa);
       if (!key) return;
       if (!byName[key]) byName[key] = [];
@@ -332,7 +914,7 @@
 
     var matched = 0;
     var out = local.map(function (f) {
-      if (f.lat != null && f.lon != null) return f;
+      if (hasCoords(f)) return f;
       var key = normName(f.nazwa);
       var candidates = byName[key] || [];
       /* If multiple candidates, prefer same miejscowosc */
@@ -340,14 +922,25 @@
       if (candidates.length === 1) {
         pick = candidates[0];
       } else if (candidates.length > 1) {
-        var targetMiej = (f.miejscowosc || "").toLowerCase();
+        var targetMiej = normAddrKey(f.miejscowosc || "");
+        var filtered = candidates;
         for (var i = 0; i < candidates.length; i++) {
-          if ((candidates[i].miejscowosc || "").toLowerCase() === targetMiej) {
-            pick = candidates[i];
-            break;
+          if (normAddrKey(candidates[i].miejscowosc || "") === targetMiej) {
+            if (filtered === candidates) filtered = [];
+            filtered.push(candidates[i]);
           }
         }
-        if (!pick) pick = candidates[0];
+        if (filtered.length === 1) pick = filtered[0];
+        if (!pick && filtered.length > 1) {
+          var targetStreet = streetToken(f);
+          if (targetStreet) {
+            var byStreet = filtered.filter(function (c) {
+              return streetToken(c) === targetStreet;
+            });
+            if (byStreet.length === 1) pick = byStreet[0];
+          }
+        }
+        if (!pick) pick = filtered[0] || candidates[0];
       }
       if (!pick) return f;
       matched++;
@@ -362,22 +955,49 @@
   }
 
   function processAndRender(facilities, powiatKey, radiusKm, source) {
-    var cities = buildRanking(facilities, radiusKm);
-    state.currentCities = cities;
-    state.activeCityKey = null;
+    buildRanking(facilities, radiusKm, powiatKey, state.analysisMode, function (cities, meta) {
+      state.currentCities = cities;
+      state.activeCityKey = null;
+      state.currentMappedFacilities = facilities.filter(function (f) { return hasCoords(f); });
 
-    setStatus(
-      "Powiat " + powiatKey + ": " +
-        facilities.length + " placowek, " +
-        cities.length + " miejscowosci | promien " +
-        radiusKm + " km | zrodlo: " + source
-    );
+      var mappedCount = state.currentMappedFacilities.length;
+      var modeLabel = state.analysisMode === "county"
+        ? "powiat jako jedno miasto"
+        : "miasta w powiecie";
+      var scopeLabel = state.analysisMode === "county"
+        ? "cale terytorium powiatu"
+        : "promien " + radiusKm + " km";
+      var cityFilterNote = "";
+      if (state.analysisMode === "cities" && meta) {
+        if (meta.cityFilterApplied) {
+          cityFilterNote =
+            " | tylko miasta (" +
+            meta.nonCityGroupsCount +
+            " miejscowosci poza filtrem)";
+        } else {
+          cityFilterNote = " | filtr miast tymczasowo niedostepny";
+        }
+      }
 
-    renderRanking(cities);
-    MapLayer.clear();
-    MapLayer.plotFacilities(facilities);
-    MapLayer.plotCityCenters(cities, function (city) {
-      selectCity(city.key);
+      setStatus(
+        "Powiat " + powiatKey + ": " +
+          facilities.length + " placowek, " +
+          mappedCount + " na mapie, " +
+          cities.length + " pozycji rankingu | tryb: " +
+          modeLabel + cityFilterNote + " | zakres: " +
+          scopeLabel + " | zrodlo: " + source
+      );
+
+      renderRanking(cities);
+      MapLayer.clear();
+      MapLayer.plotFacilities(facilities);
+      if (state.analysisMode === "county") {
+        MapLayer.plotCityCenters([], null);
+      } else {
+        MapLayer.plotCityCenters(cities, function (city) {
+          selectCity(city.key);
+        });
+      }
     });
   }
 
@@ -386,37 +1006,139 @@
    * --------------------------------------------------------------------- */
 
   /**
-   * For each unique city in the powiat, compute the centroid of its facilities
-   * and count how many facilities in the whole powiat fall within `radiusKm`.
+   * Build ranking for selected mode.
+   * In `cities` mode we keep only OSM urban places (city/town).
+   * In `county` mode we aggregate whole powiat as one item (no radius cutoff).
    */
-  function buildRanking(facilities, radiusKm) {
-    /* Facilities without a city get grouped as "(nieznana miejscowość)" */
+  function buildRanking(facilities, radiusKm, powiatKey, mode, callback) {
+    if (typeof callback !== "function") callback = function () {};
+
+    var located = facilities.filter(function (f) {
+      return hasCoords(f) && f.nazwa && f.nazwa.length > 0;
+    });
+    var baseMeta = {
+      cityFilterApplied: false,
+      nonCityGroupsCount: 0,
+      missingCoordsCount: Math.max(0, facilities.length - located.length),
+    };
+
+    if (located.length === 0) {
+      callback([], baseMeta);
+      return;
+    }
+
+    if (mode === "county") {
+      var countyCenter = Geo.centroid(located);
+      if (!countyCenter) {
+        callback([], baseMeta);
+        return;
+      }
+      var countyAll = facilities.filter(function (f) {
+        return f && f.nazwa && f.nazwa.length > 0;
+      });
+
+      var countySp = 0;
+      var countyPrz = 0;
+      var countyDk = 0;
+      var countyUczniowieTotal = 0;
+      var countyUczniowieSp = 0;
+      var countyUczniowiePrz = 0;
+
+      for (var p = 0; p < countyAll.length; p++) {
+        var fp = countyAll[p];
+        var studentsP = safeStudentCount(fp);
+
+        if (fp.typ === "SP") {
+          countySp++;
+          countyUczniowieSp += studentsP;
+        } else if (fp.typ === "PRZ") {
+          countyPrz++;
+          countyUczniowiePrz += studentsP;
+        } else if (fp.typ === "DK") {
+          countyDk++;
+        }
+        countyUczniowieTotal += studentsP;
+      }
+
+      callback([{
+        key: "__powiat__",
+        name: "Powiat " + powiatKey,
+        gmina: "",
+        center: countyCenter,
+        total: countyAll.length,
+        sp: countySp,
+        prz: countyPrz,
+        dk: countyDk,
+        uczniowieTotal: countyUczniowieTotal,
+        uczniowieSp: countyUczniowieSp,
+        uczniowiePrz: countyUczniowiePrz,
+        inRadius: countyAll.slice(),
+      }], baseMeta);
+      return;
+    }
+
     var groups = {};
-    for (var i = 0; i < facilities.length; i++) {
-      var f = facilities[i];
-      var city = (f.miejscowosc || "").trim() || "(nieznana miejscowość)";
-      var key = city + "|" + (f.gmina || "");
+    for (var i = 0; i < located.length; i++) {
+      var current = located[i];
+      var city = (current.miejscowosc || "").trim();
+      if (!city) continue;
+      var key = city + "|" + (current.gmina || "");
       if (!groups[key]) {
         groups[key] = {
           key: key,
           name: city,
-          gmina: f.gmina || "",
+          gmina: current.gmina || "",
           members: [],
         };
       }
-      groups[key].members.push(f);
+      groups[key].members.push(current);
     }
 
-    var cities = [];
-    Object.keys(groups).forEach(function (k) {
-      var g = groups[k];
-      var center = Geo.centroid(g.members);
+    var allGroups = Object.keys(groups).map(function (k) { return groups[k]; });
+    if (allGroups.length === 0) {
+      callback([], baseMeta);
+      return;
+    }
 
-      /* Skip groups without any coordinates - can't compute radius */
-      if (!center) {
-        console.log("Skipping group without coordinates:", g.name);
+    var applyFilter = typeof Overpass.fetchUrbanPlaces === "function";
+    if (!applyFilter) {
+      console.warn("Overpass.fetchUrbanPlaces unavailable; fallback without city filter.");
+      callback(computeCityRanking(allGroups, located, radiusKm), baseMeta);
+      return;
+    }
+
+    Overpass.fetchUrbanPlaces(powiatKey, function (urbanErr, urbanNames) {
+      if (urbanErr || !Array.isArray(urbanNames)) {
+        console.warn("Nie udalo sie pobrac listy miast z OSM:", urbanErr ? urbanErr.message : "brak danych");
+        callback(computeCityRanking(allGroups, located, radiusKm), baseMeta);
         return;
       }
+
+      var urbanSet = new Set(
+        urbanNames
+          .map(placeNameKey)
+          .filter(function (name) { return name.length > 0; })
+      );
+      var filteredGroups = allGroups.filter(function (g) {
+        return urbanSet.has(placeNameKey(g.name));
+      });
+      var nonCityGroupsCount = Math.max(0, allGroups.length - filteredGroups.length);
+
+      callback(computeCityRanking(filteredGroups, located, radiusKm), {
+        cityFilterApplied: true,
+        nonCityGroupsCount: nonCityGroupsCount,
+        missingCoordsCount: baseMeta.missingCoordsCount,
+      });
+    });
+  }
+
+  function computeCityRanking(groups, located, radiusKm) {
+    var cities = [];
+
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      var center = Geo.centroid(g.members);
+      if (!center) continue;
 
       var inRadius = [];
       var sp = 0;
@@ -425,24 +1147,27 @@
       var uczniowieTotal = 0;
       var uczniowieSp = 0;
       var uczniowiePrz = 0;
-      for (var j = 0; j < facilities.length; j++) {
-        var f = facilities[j];
-        /* Skip facilities without a name or coordinates */
-        if (!f.nazwa || f.nazwa.length === 0) continue;
-        if (f.lat == null || f.lon == null) continue;
 
+      for (var j = 0; j < located.length; j++) {
+        var f = located[j];
         var d = Geo.haversineKm(center.lat, center.lon, f.lat, f.lon);
-        if (d <= radiusKm) {
-          inRadius.push(f);
-          if (f.typ === "SP") sp++;
-          else if (f.typ === "PRZ") prz++;
-          else if (f.typ === "DK") dk++;
+        if (d > radiusKm) continue;
 
-          uczniowieTotal += f.uczniowie || 0;
-          if (f.typ === "SP") uczniowieSp += f.uczniowie || 0;
-          else if (f.typ === "PRZ") uczniowiePrz += f.uczniowie || 0;
+        var students = safeStudentCount(f);
+        inRadius.push(f);
+
+        if (f.typ === "SP") {
+          sp++;
+          uczniowieSp += students;
+        } else if (f.typ === "PRZ") {
+          prz++;
+          uczniowiePrz += students;
+        } else if (f.typ === "DK") {
+          dk++;
         }
+        uczniowieTotal += students;
       }
+
       cities.push({
         key: g.key,
         name: g.name,
@@ -457,7 +1182,7 @@
         uczniowiePrz: uczniowiePrz,
         inRadius: inRadius,
       });
-    });
+    }
 
     cities.sort(function (a, b) {
       if (b.uczniowieTotal !== a.uczniowieTotal) return b.uczniowieTotal - a.uczniowieTotal;
@@ -596,6 +1321,16 @@
       }
     }
 
+    if (state.analysisMode === "county") {
+      if (MapLayer.clearRadius) MapLayer.clearRadius();
+      if (MapLayer.fitToFacilities && state.currentMappedFacilities.length > 0) {
+        MapLayer.fitToFacilities(state.currentMappedFacilities);
+      } else if (city.center) {
+        MapLayer.focusOn(city.center.lat, city.center.lon, 10);
+      }
+      return;
+    }
+
     MapLayer.drawRadius(city.center, state.currentRadiusKm);
     MapLayer.focusOn(city.center.lat, city.center.lon, 12);
   }
@@ -718,28 +1453,34 @@
       return;
     }
 
-    /* Inject into state */
-    var key = result.powiatKey || powiatInput || "csv-import";
-    state.byPowiat[key] = result.facilities;
-    if (!state.datalistKeys.has(key)) {
-      state.datalistKeys.add(key);
-      rebuildDatalist();
+    /* Inject into state (supports CSV containing multiple powiats) */
+    var fallbackKey = result.powiatKey || powiatInput || "csv-import";
+    var grouped = groupFacilitiesByPowiat(result.facilities, fallbackKey);
+    var keys = Object.keys(grouped);
+    if (keys.length === 0) keys = [fallbackKey];
+    for (var g = 0; g < keys.length; g++) {
+      state.byPowiat[keys[g]] = grouped[keys[g]] || result.facilities;
+      state.datalistKeys.add(keys[g]);
     }
+    rebuildDatalist();
 
-    /* Set the powiat input */
-    if (key && els.powiatInput) {
-      els.powiatInput.value = key;
+    /* Set selected powiat after import */
+    var selectedKey = (powiatInput && grouped[powiatInput]) ? powiatInput : keys[0];
+    if (selectedKey && els.powiatInput) {
+      els.powiatInput.value = selectedKey;
     }
 
     var statusMsg = "Zaladowano " + result.facilities.length + " placowek z CSV (" +
-      result.sp + " SP, " + result.prz + " PRZ).";
+      result.sp + " SP, " + result.prz + " PRZ" +
+      (result.dk ? ", " + result.dk + " DK" : "") +
+      ", " + keys.length + " powiatow).";
 
     if (!result.hasStudents) {
       statusMsg += " Uwaga: brak kolumny 'Liczba uczniow' - uzyto srednich wartosci (SP=300, PRZ=100).";
     }
 
     if (!result.hasCoords) {
-      statusMsg += " Uwaga: brak wspolrzednych geograficznych - placowki nie beda na mapie. Sprobuj pobrac dane z OSM (wpisz powiat i kliknij Szukaj - dane zostana pobrane z OpenStreetMap).";
+      statusMsg += " Uwaga: brak wspolrzednych geograficznych w CSV - po kliknieciu Szukaj aplikacja sprobuje uzupelnic je z OpenStreetMap i geokodowania adresow.";
     }
 
     statusMsg += " Mozesz teraz kliknac Szukaj.";
@@ -902,11 +1643,11 @@
     };
 
     var facilities = [];
-    var sp = 0, prz = 0;
+    var sp = 0, prz = 0, dk = 0;
     var detectedPowiatKey = defaultPowiatKey;
     var unknownTypes = {}; /* Track types we skip for debugging */
     var debugCount = 0;   /* Log first few rows for debugging */
-    var hasCoords = (COL.lat !== -1 && COL.lon !== -1) || COL.wsp !== -1;
+    var hasCoordsColumns = (COL.lat !== -1 && COL.lon !== -1) || COL.wsp !== -1;
 
     /* Defaults applied when no student-count column is present.
      * Approx. Polish averages so ranking is meaningful even without SIO data. */
@@ -914,11 +1655,11 @@
     var DEFAULT_UCZNIOWIE_PRZ = 100;
     var hasStudents = COL.uczniowie !== -1;
 
-    console.log("Starting CSV parsing, total lines:", lines.length, "Has coords:", hasCoords, "Has students:", hasStudents);
+    console.log("Starting CSV parsing, total lines:", lines.length, "Has coord columns:", hasCoordsColumns, "Has students:", hasStudents);
 
     for (var i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
-      var cells = splitCsvLine(lines[i], sep);
+      var cells = splitCsvLine(lines[i], sep).map(cleanCsvCell);
 
       var typRaw = (cells[COL.typ] || "").trim();
       var typNormalized = typRaw.toLowerCase()
@@ -1016,7 +1757,9 @@
       /* When the CSV has no student-count column, fall back to type-based
        * averages so the ranking and badges are not all zeros. */
       if (uczniowie <= 0 && !hasStudents) {
-        uczniowie = typCode === "SP" ? DEFAULT_UCZNIOWIE_SP : DEFAULT_UCZNIOWIE_PRZ;
+        if (typCode === "SP") uczniowie = DEFAULT_UCZNIOWIE_SP;
+        else if (typCode === "PRZ") uczniowie = DEFAULT_UCZNIOWIE_PRZ;
+        else uczniowie = 0;
       }
 
       var facility = {
@@ -1045,7 +1788,9 @@
 
       /* Allow facilities without coordinates for ranking purposes */
       facilities.push(facility);
-      if (typCode === "SP") sp++; else prz++;
+      if (typCode === "SP") sp++;
+      else if (typCode === "PRZ") prz++;
+      else if (typCode === "DK") dk++;
     }
 
     /* Build helpful error message if no facilities found */
@@ -1060,7 +1805,11 @@
       errorHint = " CSV ma " + rowCount + " wierszy (bez naglowka). " +
         "Mozliwe, ze nie ma wierszy z typami 'Szkoła podstawowa' lub 'Przedszkole'. " +
         "Dostepne typy w pliku: " + (unknownTypeList.length > 0 ? unknownTypeList.join(", ") : "brak");
-    } else if (!hasCoords) {
+    }
+
+    var hasCoords = facilities.some(function (f) { return hasCoordsColumns && f.lat != null && f.lon != null; });
+
+    if (facilities.length > 0 && !hasCoords) {
       /* This is just a warning, not a critical error */
       console.log("Warning: CSV imported but has no coordinates");
     }
@@ -1070,6 +1819,7 @@
       powiatKey: detectedPowiatKey,
       sp: sp,
       prz: prz,
+      dk: dk,
       hasStudents: COL.uczniowie !== -1,
       hasCoords: hasCoords,
       unknownTypes: unknownTypeList,
@@ -1098,5 +1848,19 @@
     }
     result.push(cur);
     return result;
+  }
+
+  function cleanCsvCell(value) {
+    var out = value == null ? "" : String(value).trim();
+    /* Excel-like exports can store plain values as formulas, e.g. ="20-785". */
+    out = out.replace(/^\s*=\s*/, "");
+    if (out.length >= 2) {
+      var first = out.charAt(0);
+      var last = out.charAt(out.length - 1);
+      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+        out = out.slice(1, -1).trim();
+      }
+    }
+    return out;
   }
 })();

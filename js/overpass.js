@@ -23,6 +23,13 @@
   var TTL_LIST = 7 * 86400 * 1000;   /* 7 days  */
   var PREFIX_FAC = "overpass_fac_v3_";
   var TTL_FAC = 24 * 3600 * 1000;    /* 24 hours */
+  var PREFIX_URBAN = "overpass_urban_v1_";
+  var TTL_URBAN = 24 * 3600 * 1000;  /* 24 hours */
+  var PREFIX_PLACES = "overpass_places_v1_";
+  var TTL_PLACES = 24 * 3600 * 1000; /* 24 hours */
+  var PREFIX_BOUNDS = "overpass_bounds_v1_";
+  var TTL_BOUNDS = 7 * 86400 * 1000; /* 7 days */
+  var PREFIX_GEOCODE = "geocode_v1_";
 
   /* -----------------------------------------------------------------------
    * Public helpers
@@ -239,6 +246,164 @@
       .catch(function (err) { callback(err, null); });
   }
 
+  /**
+   * Fetch bounding box for powiat boundary relation.
+   * callback(err, {minlat, minlon, maxlat, maxlon} | null)
+   */
+  function fetchPowiatBounds(key, callback) {
+    var cached = cacheGet(PREFIX_BOUNDS + key, TTL_BOUNDS);
+    if (cached) { callback(null, cached); return; }
+
+    var escaped = regexEscape(key);
+    var nameRegex = "^(powiat )?" + escaped + "$";
+    var ql =
+      "[out:json][timeout:60];" +
+      'rel["boundary"="administrative"]["admin_level"="6"]' +
+        '["name"~"' + nameRegex + '",i];' +
+      "out bb tags;";
+
+    overpassQuery(ql)
+      .then(function (data) {
+        if (!data || !Array.isArray(data.elements) || data.elements.length === 0) {
+          callback(null, null);
+          return;
+        }
+        var relation = data.elements.find(function (e) {
+          return e && e.bounds && e.bounds.minlat != null && e.bounds.minlon != null &&
+            e.bounds.maxlat != null && e.bounds.maxlon != null;
+        });
+        if (!relation || !relation.bounds) {
+          callback(null, null);
+          return;
+        }
+        var bounds = {
+          minlat: relation.bounds.minlat,
+          minlon: relation.bounds.minlon,
+          maxlat: relation.bounds.maxlat,
+          maxlon: relation.bounds.maxlon,
+        };
+        cacheSet(PREFIX_BOUNDS + key, bounds);
+        callback(null, bounds);
+      })
+      .catch(function (err) { callback(err, null); });
+  }
+
+  /**
+   * Fetch urban places (cities/towns) for a powiat (cached 24h).
+   * callback(err, [placeName...])
+   */
+  function fetchUrbanPlaces(key, callback) {
+    var cached = cacheGet(PREFIX_URBAN + key, TTL_URBAN);
+    if (cached) { callback(null, cached); return; }
+
+    var escaped = regexEscape(key);
+    var nameRegex = "^(powiat )?" + escaped + "$";
+
+    var ql =
+      "[out:json][timeout:75];" +
+      'rel["boundary"="administrative"]["admin_level"="6"]' +
+        '["name"~"' + nameRegex + '",i]->.p;' +
+      ".p map_to_area -> .a;" +
+      "(" +
+      '  node["place"~"city|town"](area.a);' +
+      '  way["place"~"city|town"](area.a);' +
+      '  rel["place"~"city|town"](area.a);' +
+      ");" +
+      "out center tags;";
+
+    overpassQuery(ql)
+      .then(function (data) {
+        var places = data.elements
+          .map(function (e) {
+            return e && e.tags && e.tags.name ? String(e.tags.name).trim() : "";
+          })
+          .filter(function (name) { return name.length > 0; })
+          .filter(function (name, idx, arr) {
+            return arr.indexOf(name) === idx;
+          })
+          .sort(function (a, b) { return a.localeCompare(b, "pl"); });
+
+        cacheSet(PREFIX_URBAN + key, places);
+        callback(null, places);
+      })
+      .catch(function (err) { callback(err, null); });
+  }
+
+  /**
+   * Fetch all settlement places in a powiat (city/town/village/etc).
+   * callback(err, [{name, key, place, lat, lon}...])
+   */
+  function fetchPlaceCenters(key, callback) {
+    var cached = cacheGet(PREFIX_PLACES + key, TTL_PLACES);
+    if (cached) { callback(null, cached); return; }
+
+    var escaped = regexEscape(key);
+    var nameRegex = "^(powiat )?" + escaped + "$";
+
+    var ql =
+      "[out:json][timeout:80];" +
+      'rel["boundary"="administrative"]["admin_level"="6"]' +
+        '["name"~"' + nameRegex + '",i]->.p;' +
+      ".p map_to_area -> .a;" +
+      "(" +
+      '  node["place"~"city|town|village|hamlet|suburb|neighbourhood"](area.a);' +
+      '  way["place"~"city|town|village|hamlet|suburb|neighbourhood"](area.a);' +
+      '  rel["place"~"city|town|village|hamlet|suburb|neighbourhood"](area.a);' +
+      ");" +
+      "out center tags;";
+
+    overpassQuery(ql)
+      .then(function (data) {
+        var priority = {
+          city: 1,
+          town: 2,
+          village: 3,
+          hamlet: 4,
+          suburb: 5,
+          neighbourhood: 6,
+        };
+        var byKey = {};
+
+        data.elements.forEach(function (e) {
+          if (!e || !e.tags || !e.tags.name || !e.tags.place) return;
+          var lat = e.lat != null ? e.lat : (e.center ? e.center.lat : null);
+          var lon = e.lon != null ? e.lon : (e.center ? e.center.lon : null);
+          if (lat == null || lon == null) return;
+
+          var name = String(e.tags.name).trim();
+          var place = String(e.tags.place).trim();
+          var k = normalizePlaceKey(name);
+          if (!k) return;
+
+          var current = {
+            name: name,
+            key: k,
+            place: place,
+            lat: Math.round(lat * 1e6) / 1e6,
+            lon: Math.round(lon * 1e6) / 1e6,
+          };
+
+          if (!byKey[k]) {
+            byKey[k] = current;
+            return;
+          }
+
+          var prev = byKey[k];
+          var prevPrio = priority[prev.place] || 99;
+          var curPrio = priority[current.place] || 99;
+          if (curPrio < prevPrio) byKey[k] = current;
+        });
+
+        var out = Object.keys(byKey)
+          .map(function (k) { return byKey[k]; })
+          .sort(function (a, b) { return a.name.localeCompare(b.name, "pl"); });
+
+        cacheSet(PREFIX_PLACES + key, out);
+        callback(null, out);
+      })
+      .catch(function (err) { callback(err, null); });
+  }
+
   /* -----------------------------------------------------------------------
    * Data parsing
    * --------------------------------------------------------------------- */
@@ -370,6 +535,23 @@
     return s.replace(/[.^$*+?{}()|[\]\\]/g, "\\$&");
   }
 
+  function normalizePlaceKey(name) {
+    return (name || "")
+      .toLowerCase()
+      .replace(/[\u0105\u0104]/g, "a")
+      .replace(/[\u0107\u0106]/g, "c")
+      .replace(/[\u0119\u0118]/g, "e")
+      .replace(/[\u0142\u0141]/g, "l")
+      .replace(/[\u0144\u0143]/g, "n")
+      .replace(/[\u00F3\u00D3]/g, "o")
+      .replace(/[\u015B\u015A]/g, "s")
+      .replace(/[\u017A\u0179]/g, "z")
+      .replace(/[\u017C\u017B]/g, "z")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   /* -----------------------------------------------------------------------
    * Cache management
    * --------------------------------------------------------------------- */
@@ -378,7 +560,19 @@
     var toRemove = [];
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
-      if (k && (k === KEY_LIST || k.indexOf(PREFIX_FAC) === 0)) toRemove.push(k);
+      if (
+        k &&
+        (
+          k === KEY_LIST ||
+          k.indexOf(PREFIX_FAC) === 0 ||
+          k.indexOf(PREFIX_URBAN) === 0 ||
+          k.indexOf(PREFIX_PLACES) === 0 ||
+          k.indexOf(PREFIX_BOUNDS) === 0 ||
+          k.indexOf(PREFIX_GEOCODE) === 0
+        )
+      ) {
+        toRemove.push(k);
+      }
     }
     toRemove.forEach(function (k) { localStorage.removeItem(k); });
     return toRemove.length;
@@ -387,6 +581,9 @@
   global.Overpass = {
     loadPowiatList: loadPowiatList,
     fetchFacilities: fetchFacilities,
+    fetchPowiatBounds: fetchPowiatBounds,
+    fetchUrbanPlaces: fetchUrbanPlaces,
+    fetchPlaceCenters: fetchPlaceCenters,
     powiatKey: powiatKey,
     clearCache: clearCache,
   };
