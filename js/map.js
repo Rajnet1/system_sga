@@ -81,11 +81,14 @@
       if (f.lat == null || f.lon == null) return;
 
       var marker = L.marker([f.lat, f.lon], { icon: facilityIcon(f.typ) });
-      var typLabel = f.typ === "SP" ? "Szkoła podstawowa" : (f.typ === "PRZ" ? "Przedszkole" : "Dom kultury");
+      var typLabel = f.typ === "SP" ? "Szkoła podstawowa" : f.typ === "PRZ" ? "Przedszkole" : "Dom / Ośrodek Kultury";
       var approxNote =
         f.coords_source === "place_center"
           ? '<br/><span style="color:#b45309;font-size:11px;">Lokalizacja przyblizona (srodek miejscowosci)</span>'
           : "";
+      var uczniowieNote = (f.typ !== "DK" && f.uczniowie && f.uczniowie > 0)
+        ? '<br/><span style="color:#1565c0;font-size:11px;">' + f.uczniowie + ' uczniów</span>'
+        : "";
       marker.bindPopup(
         '<strong>' +
           escapeHtml(f.nazwa) +
@@ -94,6 +97,7 @@
           typLabel +
           "</em><br/>" +
           escapeHtml(f.adres || f.miejscowosc || "") +
+          uczniowieNote +
           approxNote
       );
       marker.addTo(facilityLayer);
