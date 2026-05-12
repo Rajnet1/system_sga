@@ -12,11 +12,10 @@
 
   var state = {
     byPowiat: {},         /* powiat_key -> [facility, ...] (CSV import or Overpass) */
-    datalistKeys: new Set(), /* all known powiat keys for datalist */
     currentCities: [],    /* ranking for last search */
     currentMappedFacilities: [], /* last rendered facilities with coordinates */
     currentRadiusKm: 5,
-    analysisMode: "cities", /* cities | county */
+    analysisMode: "cities", /* cities | county — ustawiany auto po imporcie CSV */
     activeCityKey: null,
     searching: false,
   };
@@ -31,23 +30,22 @@
   var els = {};
 
   document.addEventListener("DOMContentLoaded", function () {
-    els.form = document.getElementById("search-form");
+    els.form        = document.getElementById("search-form");
     els.powiatInput = document.getElementById("powiat-input");
     els.radiusInput = document.getElementById("radius-input");
-    els.modeSelect = document.getElementById("mode-select");
-    els.powiatList = document.getElementById("powiat-list");
-    els.status = document.getElementById("status");
-    els.results = document.getElementById("results");
-    els.submitBtn = els.form.querySelector("button[type=submit]");
-    els.csvImportBtn = document.getElementById("csv-import-btn");
-    els.csvModal = document.getElementById("csv-modal");
+    els.status      = document.getElementById("status");
+    els.results     = document.getElementById("results");
+    els.submitBtn   = document.getElementById("submit-btn");
+    els.csvInfo     = document.getElementById("csv-info");
+    els.csvImportBtn  = document.getElementById("csv-import-btn");
+    els.csvModal      = document.getElementById("csv-modal");
     els.csvModalClose = document.getElementById("csv-modal-close");
-    els.csvDropzone = document.getElementById("csv-dropzone");
-    els.csvFileInput = document.getElementById("csv-file-input");
-    els.csvFilename = document.getElementById("csv-filename");
+    els.csvDropzone   = document.getElementById("csv-dropzone");
+    els.csvFileInput  = document.getElementById("csv-file-input");
+    els.csvFilename   = document.getElementById("csv-filename");
     els.csvParseStatus = document.getElementById("csv-parse-status");
-    els.csvLoadBtn = document.getElementById("csv-load-btn");
-    els.csvCancelBtn = document.getElementById("csv-cancel-btn");
+    els.csvLoadBtn    = document.getElementById("csv-load-btn");
+    els.csvCancelBtn  = document.getElementById("csv-cancel-btn");
 
     MapLayer.initMap("map");
 
@@ -94,8 +92,7 @@
       });
     }
 
-    setStatus("Ładowanie listy powiatów...");
-    loadOverpassPowiatList();
+    setStatus("Wgraj plik CSV z RSPO aby rozpocząć wyszukiwanie.");
   });
 
   /* -----------------------------------------------------------------------
@@ -112,7 +109,8 @@
   function setLoading(loading) {
     state.searching = loading;
     if (els.submitBtn) {
-      els.submitBtn.disabled = loading;
+      /* Keep button disabled if no CSV loaded yet (powiatInput empty) */
+      els.submitBtn.disabled = loading || !els.powiatInput.value;
       els.submitBtn.textContent = loading ? "Ładowanie..." : "Szukaj";
     }
   }
@@ -120,20 +118,6 @@
   /* -----------------------------------------------------------------------
    * Data loading
    * --------------------------------------------------------------------- */
-
-  function loadOverpassPowiatList() {
-    Overpass.loadPowiatList(function (err, list) {
-      if (err || !list) {
-        console.warn("Overpass powiat list error:", err);
-        return;
-      }
-      var keys = list.map(function (item) { return item.key; });
-      mergeIntoDatalist(keys);
-      setStatus(
-        "Gotowy. Wgraj CSV z RSPO (przycisk + CSV) lub wpisz powiat i kliknij Szukaj (dane z OpenStreetMap)."
-      );
-    });
-  }
 
   function hasCoords(facility) {
     return facility && facility.lat != null && facility.lon != null;
@@ -159,42 +143,17 @@
     return grouped;
   }
 
-  function mergeIntoDatalist(keys) {
-    keys.forEach(function (k) { state.datalistKeys.add(k); });
-    rebuildDatalist();
-  }
-
-  function rebuildDatalist() {
-    if (!els.powiatList) return;
-    els.powiatList.innerHTML = "";
-    /* Sort before rendering */
-    var sorted = Array.from(state.datalistKeys).sort(function (a, b) {
-      return a.localeCompare(b, "pl");
-    });
-    sorted.forEach(function (k) {
-      var opt = document.createElement("option");
-      opt.value = k;
-      els.powiatList.appendChild(opt);
-    });
-  }
-
   /* -----------------------------------------------------------------------
    * Search handler
    * --------------------------------------------------------------------- */
 
-  function normalizePowiat(input) {
-    return Overpass.powiatKey(input);
-  }
-
   function handleSearch() {
     var rawPowiat = els.powiatInput.value;
-    var powiatKey = normalizePowiat(rawPowiat);
+    var powiatKey = Overpass.powiatKey(rawPowiat);
     var radiusKm = parseFloat(els.radiusInput.value);
-    var mode = els.modeSelect ? els.modeSelect.value : "cities";
-    if (mode !== "cities" && mode !== "county") mode = "cities";
 
     if (!powiatKey) {
-      setStatus("Wpisz nazwę powiatu.", true);
+      setStatus("Wgraj plik CSV z RSPO aby rozpocząć wyszukiwanie.", true);
       return;
     }
     if (!radiusKm || radiusKm <= 0) {
@@ -203,7 +162,7 @@
     }
 
     state.currentRadiusKm = radiusKm;
-    state.analysisMode = mode;
+    /* state.analysisMode jest ustawiany automatycznie podczas importu CSV */
 
     /* If we have local data for this powiat, use it immediately.
      * BUT: if none of the local facilities have coordinates (e.g. CSV import
@@ -306,26 +265,17 @@
           "Błąd pobierania z Overpass: " + err.message + ". Spróbuj ponownie.",
           true
         );
-        renderSuggestions(powiatKey);
         return;
       }
       if (!facilities || facilities.length === 0) {
         setStatus(
-          'Nie znaleziono placówek dla powiatu ' +
-            powiatKey +
-            '". Sprawdź pisownię.',
+          "Nie znaleziono placówek dla powiatu \"" + powiatKey + "\". Sprawdź pisownię.",
           true
         );
-        renderSuggestions(powiatKey);
         return;
       }
 
-      /* Cache in local state so re-renders don't hit Overpass again */
       state.byPowiat[powiatKey] = facilities;
-      if (!state.datalistKeys.has(powiatKey)) {
-        state.datalistKeys.add(powiatKey);
-        rebuildDatalist();
-      }
       processAndRender(facilities, powiatKey, radiusKm, "OpenStreetMap (Overpass)");
     });
   }
@@ -1358,32 +1308,6 @@
     MapLayer.focusOn(city.center.lat, city.center.lon, 12);
   }
 
-  function renderSuggestions(partial) {
-    els.results.innerHTML = "";
-    if (!partial) return;
-    var all = Array.from(state.datalistKeys);
-    var matches = all
-      .filter(function (k) { return k.indexOf(partial) !== -1; })
-      .slice(0, 12);
-    if (matches.length === 0) return;
-    var header = document.createElement("div");
-    header.style.cssText = "padding:8px 10px 0;font-size:12px;color:#52606d;";
-    header.textContent = "Może chodziło o:";
-    els.results.appendChild(header);
-    var ul = document.createElement("ul");
-    ul.className = "suggestions";
-    matches.forEach(function (m) {
-      var li = document.createElement("li");
-      li.textContent = m;
-      li.addEventListener("click", function () {
-        els.powiatInput.value = m;
-        handleSearch();
-      });
-      ul.appendChild(li);
-    });
-    els.results.appendChild(ul);
-  }
-
   function escapeHtml(str) {
     if (str == null) return "";
     return String(str)
@@ -1460,8 +1384,7 @@
       return;
     }
 
-    var powiatInput = normalizePowiat(els.powiatInput.value || "");
-    var result = parseCsvText(csv, powiatInput);
+    var result = parseCsvText(csv);
 
     if (result.error) {
       setCsvStatus("Blad parsowania: " + result.error, "err");
@@ -1476,48 +1399,52 @@
       return;
     }
 
-    /* Inject into state (supports CSV containing multiple powiats) */
-    var fallbackKey = result.powiatKey || powiatInput || "csv-import";
+    /* Inject into state — group by powiat */
+    var fallbackKey = result.powiatKey || "csv-import";
     var grouped = groupFacilitiesByPowiat(result.facilities, fallbackKey);
     var keys = Object.keys(grouped);
     if (keys.length === 0) keys = [fallbackKey];
     for (var g = 0; g < keys.length; g++) {
       state.byPowiat[keys[g]] = grouped[keys[g]] || result.facilities;
-      state.datalistKeys.add(keys[g]);
     }
-    rebuildDatalist();
 
-    /* Set selected powiat after import */
-    var selectedKey = (powiatInput && grouped[powiatInput]) ? powiatInput : keys[0];
-    if (selectedKey && els.powiatInput) {
-      els.powiatInput.value = selectedKey;
+    /* Set powiat key into hidden input */
+    var selectedKey = keys[0];
+    els.powiatInput.value = selectedKey;
+
+    /* Auto-detect mode: county when only 1 unique city, cities otherwise */
+    var facilitiesForPowiat = state.byPowiat[selectedKey] || result.facilities;
+    var uniqueCities = new Set();
+    for (var u = 0; u < facilitiesForPowiat.length; u++) {
+      var uc = normAddrKey(facilitiesForPowiat[u].miejscowosc || "");
+      if (uc) uniqueCities.add(uc);
     }
+    state.analysisMode = uniqueCities.size <= 1 ? "county" : "cities";
+
+    /* Show province/powiat info strip */
+    var wojList = result.wojewodztwa && result.wojewodztwa.length > 0
+      ? result.wojewodztwa.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); })
+      : [];
+    var infoText = wojList.length > 0
+      ? "woj. " + wojList.join(", ") + " • powiat " + selectedKey
+      : "powiat " + selectedKey;
+    if (keys.length > 1) infoText += " (+" + (keys.length - 1) + " inne)";
+    els.csvInfo.textContent = infoText;
+    els.csvInfo.removeAttribute("hidden");
+
+    /* Enable search button */
+    els.submitBtn.disabled = false;
 
     var statusMsg = "Zaladowano " + result.facilities.length + " placowek z CSV (" +
-      result.sp + " SP, " + result.prz + " PRZ, " + (result.dk || 0) + " DK" +
-      ", " + keys.length + " powiatow).";
+      result.sp + " SP, " + result.prz + " PRZ, " + (result.dk || 0) + " DK). " +
+      "Tryb: " + (state.analysisMode === "county" ? "całość bez podziału" : "ranking miast") + ".";
 
     if (!result.hasStudents) {
-      statusMsg += " Uwaga: brak kolumny 'Liczba uczniow' - uzyto srednich wartosci (SP=300, PRZ=100).";
+      statusMsg += " Brak kolumny uczniow — uzyte wartosci domyslne.";
     }
 
-    if (!result.hasCoords) {
-      statusMsg += " Uwaga: brak wspolrzednych geograficznych w CSV - po kliknieciu Szukaj aplikacja sprobuje uzupelnic je z OpenStreetMap i geokodowania adresow.";
-    }
-
-    statusMsg += " Mozesz teraz kliknac Szukaj.";
-
-    var statusClass = (result.hasCoords) ? "ok" : "err";
+    var statusClass = result.hasCoords ? "ok" : "err";
     setCsvStatus(statusMsg, statusClass);
-
-    console.log("Import result:", {
-      facilitiesCount: result.facilities.length,
-      sp: result.sp,
-      prz: result.prz,
-      hasStudents: result.hasStudents,
-      hasCoords: result.hasCoords,
-      sampleFacility: result.facilities[0]
-    });
 
     /* Auto-close after short delay and trigger search */
     setTimeout(function () {
@@ -1535,9 +1462,10 @@
   /**
    * Minimal in-browser CSV parser for RSPO exports.
    * Handles semicolon-separated files with a header row.
-   * Returns { facilities, powiatKey, sp, prz, error }.
+   * Returns { facilities, powiatKey, wojewodztwa, sp, prz, dk, error }.
    */
-  function parseCsvText(text, defaultPowiatKey) {
+  function parseCsvText(text) {
+    var defaultPowiatKey = "";
     /* Strip UTF-8 BOM if present */
     if (text.charCodeAt(0) === 0xFEFF) {
       text = text.slice(1);
@@ -1667,6 +1595,7 @@
     var facilities = [];
     var sp = 0, prz = 0, dk = 0;
     var detectedPowiatKey = defaultPowiatKey;
+    var uniqueWoj = {};   /* Track unique województwa */
     var unknownTypes = {}; /* Track types we skip for debugging */
     var debugCount = 0;   /* Log first few rows for debugging */
     var hasCoordsColumns = (COL.lat !== -1 && COL.lon !== -1) || COL.wsp !== -1;
@@ -1748,6 +1677,9 @@
         detectedPowiatKey = Overpass.powiatKey(powiatRaw);
       }
 
+      var wojRaw = COL.woj !== -1 ? (cells[COL.woj] || "").trim() : "";
+      if (wojRaw) uniqueWoj[wojRaw.toUpperCase()] = true;
+
       var miejscowosc = COL.miej !== -1 ? (cells[COL.miej] || "").trim() : "";
       var gmina = COL.gmina !== -1 ? (cells[COL.gmina] || "").trim() : "";
 
@@ -1826,13 +1758,14 @@
     return {
       facilities: facilities,
       powiatKey: detectedPowiatKey,
+      wojewodztwa: Object.keys(uniqueWoj),
       sp: sp,
       prz: prz,
       dk: dk,
       hasStudents: COL.uczniowie !== -1,
       hasCoords: hasCoords,
       unknownTypes: unknownTypeList,
-      error: null /* Don't treat missing coords as error */
+      error: null
     };
   }
 

@@ -297,6 +297,18 @@ body {
   cursor: pointer;
 }
 
+/* --- CSV province info bar ----------------------------------------------- */
+
+.csv-info {
+  padding: 7px 10px;
+  background: #ebf4ff;
+  border-left: 3px solid #2b6cb0;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #1a365d;
+  font-weight: 500;
+}
+
 /* --- Status -------------------------------------------------------------- */
 
 .status {

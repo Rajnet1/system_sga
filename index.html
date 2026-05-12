@@ -21,18 +21,11 @@
     </header>
 
     <form id="search-form" class="search-form" autocomplete="off">
-      <label class="field">
-        <span>Powiat</span>
-        <input
-          type="text"
-          id="powiat-input"
-          name="powiat"
-          placeholder="np. krakowski"
-          list="powiat-list"
-          required
-        />
-        <datalist id="powiat-list"></datalist>
-      </label>
+      <!-- powiat-input hidden — wypełniany automatycznie z CSV -->
+      <input type="hidden" id="powiat-input" name="powiat" />
+
+      <!-- Info o województwie/powiecie z załadowanego CSV -->
+      <div id="csv-info" class="csv-info" hidden></div>
 
       <label class="field">
         <span>Promien (km)</span>
@@ -47,16 +40,8 @@
         />
       </label>
 
-      <label class="field">
-        <span>Tryb liczenia</span>
-        <select id="mode-select" name="mode">
-          <option value="cities">Miasta w powiecie</option>
-          <option value="county">Powiat jako jedno miasto</option>
-        </select>
-      </label>
-
       <div class="form-row">
-        <button type="submit">Szukaj</button>
+        <button type="submit" id="submit-btn" disabled>Szukaj</button>
         <button type="button" id="csv-import-btn" class="btn-secondary" title="Zaladuj plik CSV z RSPO">
           + CSV
         </button>
@@ -125,9 +110,9 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
-  <script src="js/geo.js?v=20260512-3"></script>
-  <script src="js/map.js?v=20260512-3"></script>
-  <script src="js/overpass.js?v=20260512-3"></script>
-  <script src="js/app.js?v=20260512-3"></script>
+  <script src="js/geo.js?v=20260512-4"></script>
+  <script src="js/map.js?v=20260512-4"></script>
+  <script src="js/overpass.js?v=20260512-4"></script>
+  <script src="js/app.js?v=20260512-4"></script>
 </body>
 </html>
