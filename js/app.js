@@ -922,15 +922,38 @@
     Overpass.fetchCultureCentres(powiatKey, function (err, osmDk) {
       var merged = facilities;
       if (!err && Array.isArray(osmDk) && osmDk.length > 0) {
+        /* Index existing DK by name to avoid duplicates */
         var existingDkNames = {};
         for (var i = 0; i < facilities.length; i++) {
           if (facilities[i].typ === "DK") {
             existingDkNames[normName(facilities[i].nazwa)] = true;
           }
         }
+
+        /* Build city→gmina map from CSV facilities so OSM DK can inherit gmina.
+         * This prevents the same city appearing twice in the ranking (CSV group
+         * has gmina, OSM DK group has empty gmina → different keys). */
+        var cityGminaMap = {};
+        for (var j = 0; j < facilities.length; j++) {
+          var f = facilities[j];
+          var ck = normAddrKey(f.miejscowosc || "");
+          if (ck && f.gmina && !cityGminaMap[ck]) {
+            cityGminaMap[ck] = f.gmina;
+          }
+        }
+
         var newDk = osmDk.filter(function (dk) {
           return dk.typ === "DK" && !existingDkNames[normName(dk.nazwa)];
         });
+
+        /* Assign gmina from CSV for same-city DK (prevents duplicate city rows) */
+        newDk.forEach(function (dk) {
+          if (!dk.gmina && dk.miejscowosc) {
+            var ck = normAddrKey(dk.miejscowosc);
+            if (cityGminaMap[ck]) dk.gmina = cityGminaMap[ck];
+          }
+        });
+
         if (newDk.length > 0) {
           merged = facilities.concat(newDk);
           source = source + " + " + newDk.length + " DK z OSM";
@@ -1070,16 +1093,28 @@
       var current = located[i];
       var city = (current.miejscowosc || "").trim();
       if (!city) continue;
-      var key = city + "|" + (current.gmina || "");
-      if (!groups[key]) {
-        groups[key] = {
-          key: key,
+      /* Normalize key to prevent duplicates when CSV and OSM data differ in:
+       * - casing of city name ("Kraków" vs "kraków")
+       * - gmina presence (CSV has gmina, OSM DK often doesn't)
+       * We group purely by normalized city name; gmina stored for display only. */
+      var cityNorm = normAddrKey(city);
+      if (!groups[cityNorm]) {
+        groups[cityNorm] = {
+          key: cityNorm,
           name: city,
           gmina: current.gmina || "",
           members: [],
         };
+      } else {
+        /* Prefer non-empty gmina and proper-cased name from CSV */
+        if (!groups[cityNorm].gmina && current.gmina) {
+          groups[cityNorm].gmina = current.gmina;
+        }
+        if (!groups[cityNorm].name || (current.gmina && !groups[cityNorm].gmina)) {
+          groups[cityNorm].name = city;
+        }
       }
-      groups[key].members.push(current);
+      groups[cityNorm].members.push(current);
     }
 
     var allGroups = Object.keys(groups).map(function (k) { return groups[k]; });
