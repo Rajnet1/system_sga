@@ -220,9 +220,9 @@
         }
 
         if (withoutCoords === 0) {
-          var localSource = "lokalna baza RSPO";
+          var localSource = "CSV";
           if (invalidated > 0) localSource += " (skorygowano " + invalidated + " poza granica powiatu)";
-          processAndRender(localFacilities, powiatKey, radiusKm, localSource);
+          processAndRenderWithDk(localFacilities, powiatKey, radiusKm, localSource);
           return;
         }
 
@@ -253,7 +253,7 @@
                 if (placeMeta && placeMeta.resolved > 0) {
                   sourceFallback += " + miejscowosci OSM (" + placeMeta.resolved + ")";
                 }
-                processAndRender(finalFacilities, powiatKey, radiusKm, sourceFallback);
+                processAndRenderWithDk(finalFacilities, powiatKey, radiusKm, sourceFallback);
               });
             });
             return;
@@ -264,7 +264,7 @@
           if (missingAfterMerge === 0) {
             setLoading(false);
             state.byPowiat[powiatKey] = merged;
-            processAndRender(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (uzupelnione wspolrzedne)");
+            processAndRenderWithDk(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (uzupelnione wspolrzedne)");
             return;
           }
 
@@ -285,7 +285,7 @@
               if (placeMeta2 && placeMeta2.resolved > 0) {
                 source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
               }
-              processAndRender(finalMerged, powiatKey, radiusKm, source);
+              processAndRenderWithDk(finalMerged, powiatKey, radiusKm, source);
             });
           });
         });
@@ -906,6 +906,40 @@
     });
     console.log("mergeCoordsByName: matched " + matched + "/" + local.length + " facilities");
     return out;
+  }
+
+  /**
+   * Fetch DK from OSM and merge into facilities list (deduplication by name).
+   * Used when primary data comes from CSV (which may lack DK entries).
+   */
+  function processAndRenderWithDk(facilities, powiatKey, radiusKm, source) {
+    if (typeof Overpass.fetchCultureCentres !== "function") {
+      processAndRender(facilities, powiatKey, radiusKm, source);
+      return;
+    }
+
+    setStatus("Pobieranie domów kultury z OpenStreetMap...");
+    Overpass.fetchCultureCentres(powiatKey, function (err, osmDk) {
+      var merged = facilities;
+      if (!err && Array.isArray(osmDk) && osmDk.length > 0) {
+        var existingDkNames = {};
+        for (var i = 0; i < facilities.length; i++) {
+          if (facilities[i].typ === "DK") {
+            existingDkNames[normName(facilities[i].nazwa)] = true;
+          }
+        }
+        var newDk = osmDk.filter(function (dk) {
+          return dk.typ === "DK" && !existingDkNames[normName(dk.nazwa)];
+        });
+        if (newDk.length > 0) {
+          merged = facilities.concat(newDk);
+          source = source + " + " + newDk.length + " DK z OSM";
+        }
+      } else if (err) {
+        console.warn("Nie udalo sie pobrac DK z OSM:", err.message);
+      }
+      processAndRender(merged, powiatKey, radiusKm, source);
+    });
   }
 
   function processAndRender(facilities, powiatKey, radiusKm, source) {
