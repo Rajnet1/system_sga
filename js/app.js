@@ -1634,7 +1634,6 @@
       "szkola podstawowa": "SP",
       "przedszkole": "PRZ",
       "przedszkole publiczne": "PRZ",
-      "dom kultury ": "DK",
       "szkola": "SP",
       "publiczna szkola podstawowa": "SP",
       "publiczne przedszkole": "PRZ",

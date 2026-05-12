@@ -201,46 +201,15 @@
       '  way["leisure"="community_centre"](area.a);' +
       '  node["leisure"="culture_centre"](area.a);' +
       '  way["leisure"="culture_centre"](area.a);' +
-      /* Polish cultural centres - often tagged as "centre" or with "club" */
-      '  node["amenity"~"centre|center"](area.a);' +
-      '  way["amenity"~"centre|center"](area.a);' +
-      '  node["club"](area.a);' +
-      '  way["club"](area.a);' +
       ");" +
       "out center tags;";
 
     overpassQuery(ql)
       .then(function (data) {
-        console.log("Raw Overpass response for " + key + ":", {
-          totalElements: data.elements.length,
-          sampleElements: data.elements.slice(0, 5).map(function(e) {
-            return {
-              type: e.type,
-              id: e.id,
-              amenity: e.tags?.amenity,
-              building: e.tags?.building,
-              leisure: e.tags?.leisure,
-              name: e.tags?.name
-            };
-          })
-        });
-
         var facilities = parseElements(data.elements, key);
         if (facilities.length > 0) {
           cacheSet(PREFIX_FAC + key, facilities);
         }
-        console.log("Overpass results for " + key + ":", {
-          totalElements: data.elements.length,
-          facilities: facilities.length,
-          byType: {
-            SP: facilities.filter(function(f) { return f.typ === "SP"; }).length,
-            PRZ: facilities.filter(function(f) { return f.typ === "PRZ"; }).length,
-            DK: facilities.filter(function(f) { return f.typ === "DK"; }).length
-          },
-          sampleDK: facilities.filter(function(f) { return f.typ === "DK"; }).slice(0, 3).map(function(f) {
-            return { nazwa: f.nazwa, tags: data.elements.find(function(e) { return String(e.id) === f.rspo; })?.tags };
-          })
-        });
         callback(null, facilities);
       })
       .catch(function (err) { callback(err, null); });
@@ -439,20 +408,6 @@
   }
 
   function parseElements(elements, key) {
-    /* Debug: log all community_centre elements */
-    var communityCentres = elements.filter(function (e) {
-      return e.tags && (
-        e.tags.amenity === "community_centre" ||
-        e.tags.building === "community_centre" ||
-        e.tags.leisure === "community_centre"
-      );
-    });
-    if (communityCentres.length > 0) {
-      console.log("Found community_centre elements:", communityCentres.length, communityCentres.slice(0, 3).map(function (e) {
-        return { id: e.id, name: e.tags.name, amenity: e.tags.amenity, building: e.tags.building, leisure: e.tags.leisure };
-      }));
-    }
-
     return elements
       .filter(function (e) {
         if (!e.tags) return false;
@@ -464,9 +419,7 @@
             e.tags.building === "community_centre" ||
             e.tags.building === "culture_centre" ||
             e.tags.leisure === "community_centre" ||
-            e.tags.leisure === "culture_centre" ||
-            (e.tags.amenity && /centre|center/i.test(e.tags.amenity)) ||
-            e.tags.club) {
+            e.tags.leisure === "culture_centre") {
           return true;
         }
         return false;
@@ -490,9 +443,7 @@
                    e.tags.building === "community_centre" ||
                    e.tags.building === "culture_centre" ||
                    e.tags.leisure === "community_centre" ||
-                   e.tags.leisure === "culture_centre" ||
-                   (e.tags.amenity && /centre|center/i.test(e.tags.amenity)) ||
-                   e.tags.club) {
+                   e.tags.leisure === "culture_centre") {
           typ = "DK";
         } else {
           return null;
