@@ -20,7 +20,7 @@
     searching: false,
   };
 
-  var GEO_CACHE_PREFIX = "geocode_v1_";
+  var GEO_CACHE_PREFIX = "geocode_v2_";
   var GEO_CACHE_HIT_TTL = 180 * 86400 * 1000; /* 180 days */
   var GEO_CACHE_MISS_TTL = 14 * 86400 * 1000; /* 14 days */
   var GEO_DELAY_MS = 1100; /* Nominatim-friendly pacing */
@@ -544,7 +544,7 @@
     });
   }
 
-  function geocodeQueryNominatim(query, options, callback) {
+  function geocodeQueryPhoton(query, options, callback) {
     options = options || {};
     var scopeKey = geocodeScopeKey(options.powiatKey, options.bounds);
     var cached = geocodeCacheGet(query, scopeKey);
@@ -561,18 +561,18 @@
 
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     var timer = null;
-    var url =
-      "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=pl&addressdetails=0&accept-language=pl&q=" +
-      encodeURIComponent(query);
+
+    /* Photon (photon.komoot.io) — OSM-based geocoder, CORS-friendly for browsers */
+    var url = "https://photon.komoot.io/api/?q=" + encodeURIComponent(query) + "&limit=5&lang=pl";
 
     if (options.bounds) {
-      var viewbox = [
-        options.bounds.minlon,
-        options.bounds.maxlat,
-        options.bounds.maxlon,
-        options.bounds.minlat,
-      ].join(",");
-      url += "&viewbox=" + encodeURIComponent(viewbox) + "&bounded=1";
+      /* Photon bbox: minlon,minlat,maxlon,maxlat */
+      url +=
+        "&bbox=" +
+        options.bounds.minlon + "," +
+        options.bounds.minlat + "," +
+        options.bounds.maxlon + "," +
+        options.bounds.maxlat;
     }
 
     fetch(url, {
@@ -584,20 +584,27 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rows) {
-        if (Array.isArray(rows) && rows.length > 0) {
-          var lat = parseFloat(rows[0].lat);
-          var lon = parseFloat(rows[0].lon);
-          if (!isNaN(lat) && !isNaN(lon)) {
-            var coords = {
-              lat: Math.round(lat * 1e6) / 1e6,
-              lon: Math.round(lon * 1e6) / 1e6,
-            };
-            if (isInsideBounds(coords.lat, coords.lon, options.bounds)) {
-              geocodeCacheSet(query, scopeKey, "ok", coords);
-              callback(null, { coords: coords, fromCache: false });
-              return;
-            }
+      .then(function (geojson) {
+        var features = (geojson && Array.isArray(geojson.features)) ? geojson.features : [];
+        for (var i = 0; i < features.length; i++) {
+          var feat = features[i];
+          if (!feat || !feat.geometry || !Array.isArray(feat.geometry.coordinates)) continue;
+          var lon = feat.geometry.coordinates[0];
+          var lat = feat.geometry.coordinates[1];
+          if (isNaN(lat) || isNaN(lon)) continue;
+          /* Filter to Poland */
+          var country = feat.properties && (feat.properties.country || feat.properties.country_code || "");
+          if (String(country).toLowerCase() === "germany" ||
+              String(country).toLowerCase() === "ukraine" ||
+              String(country).toLowerCase() === "belarus") continue;
+          var coords = {
+            lat: Math.round(lat * 1e6) / 1e6,
+            lon: Math.round(lon * 1e6) / 1e6,
+          };
+          if (isInsideBounds(coords.lat, coords.lon, options.bounds)) {
+            geocodeCacheSet(query, scopeKey, "ok", coords);
+            callback(null, { coords: coords, fromCache: false });
+            return;
           }
         }
         geocodeCacheSet(query, scopeKey, "miss", null);
@@ -633,7 +640,7 @@
         return;
       }
       var query = queries[idx++];
-      geocodeQueryNominatim(query, { powiatKey: powiatKey, bounds: powiatBounds }, function (err, result) {
+      geocodeQueryPhoton(query, { powiatKey: powiatKey, bounds: powiatBounds }, function (err, result) {
         if (result && !result.fromCache) usedNetwork = true;
         if (result && result.coords) {
           callback(null, { coords: result.coords, fromCacheOnly: !usedNetwork });

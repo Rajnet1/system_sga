@@ -29,7 +29,7 @@
   var TTL_PLACES = 24 * 3600 * 1000; /* 24 hours */
   var PREFIX_BOUNDS = "overpass_bounds_v1_";
   var TTL_BOUNDS = 7 * 86400 * 1000; /* 7 days */
-  var PREFIX_GEOCODE = "geocode_v1_";
+  var PREFIX_GEOCODE = "geocode_v2_";
 
   /* -----------------------------------------------------------------------
    * Public helpers
