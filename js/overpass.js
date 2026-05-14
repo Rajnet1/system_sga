@@ -30,8 +30,6 @@
   var PREFIX_BOUNDS = "overpass_bounds_v1_";
   var TTL_BOUNDS = 7 * 86400 * 1000; /* 7 days */
   var PREFIX_GEOCODE = "geocode_v1_";
-  var PREFIX_DK = "overpass_dk_v2_";
-  var TTL_DK = 24 * 3600 * 1000;    /* 24 hours */
 
   /* -----------------------------------------------------------------------
    * Public helpers
@@ -255,45 +253,6 @@
         };
         cacheSet(PREFIX_BOUNDS + key, bounds);
         callback(null, bounds);
-      })
-      .catch(function (err) { callback(err, null); });
-  }
-
-  /**
-   * Fetch only community/culture centres (DK) for a powiat (cached 24h).
-   * Used to overlay DK markers on top of CSV-imported SP/PRZ data.
-   * callback(err, [facility...])
-   */
-  function fetchCultureCentres(key, callback) {
-    var cached = cacheGet(PREFIX_DK + key, TTL_DK);
-    if (cached) { callback(null, cached); return; }
-
-    var escaped = regexEscape(key);
-    var nameRegex = "^(powiat )?" + escaped + "$";
-    var ql =
-      "[out:json][timeout:60];" +
-      'rel["boundary"="administrative"]["admin_level"="6"]' +
-        '["name"~"' + nameRegex + '",i]->.p;' +
-      ".p map_to_area -> .a;" +
-      "(" +
-      '  node["amenity"="community_centre"](area.a);' +
-      '  way["amenity"="community_centre"](area.a);' +
-      '  node["amenity"="culture_centre"](area.a);' +
-      '  way["amenity"="culture_centre"](area.a);' +
-      '  node["building"="community_centre"](area.a);' +
-      '  way["building"="community_centre"](area.a);' +
-      '  node["leisure"="community_centre"](area.a);' +
-      '  way["leisure"="community_centre"](area.a);' +
-      ");" +
-      "out center tags;";
-
-    overpassQuery(ql)
-      .then(function (data) {
-        var facilities = parseElements(data.elements, key).filter(function (f) {
-          return f && f.typ === "DK";
-        });
-        cacheSet(PREFIX_DK + key, facilities);
-        callback(null, facilities);
       })
       .catch(function (err) { callback(err, null); });
   }
@@ -557,7 +516,6 @@
         (
           k === KEY_LIST ||
           k.indexOf(PREFIX_FAC) === 0 ||
-          k.indexOf(PREFIX_DK) === 0 ||
           k.indexOf(PREFIX_URBAN) === 0 ||
           k.indexOf(PREFIX_PLACES) === 0 ||
           k.indexOf(PREFIX_BOUNDS) === 0 ||
@@ -575,7 +533,6 @@
     loadPowiatList: loadPowiatList,
     fetchFacilities: fetchFacilities,
     fetchPowiatBounds: fetchPowiatBounds,
-    fetchCultureCentres: fetchCultureCentres,
     fetchUrbanPlaces: fetchUrbanPlaces,
     fetchPlaceCenters: fetchPlaceCenters,
     powiatKey: powiatKey,

@@ -27,6 +27,14 @@
   var GEO_TIMEOUT_MS = 15000;
   var GEO_MAX_PER_RUN = 250;
 
+  var GOOGLE_KEY_LS = "google_places_api_key";
+  var GOOGLE_DK_CACHE_PREFIX = "google_dk_v1_";
+  var GOOGLE_DK_TTL = 7 * 86400 * 1000;
+  var GOOGLE_DK_QUERIES = ["dom kultury", "ośrodek kultury", "centrum kultury", "biblioteka publiczna"];
+
+  var _gmapsLoaded = false;
+  var _gmapsLoadCallbacks = null;
+
   var els = {};
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -46,6 +54,8 @@
     els.csvParseStatus = document.getElementById("csv-parse-status");
     els.csvLoadBtn    = document.getElementById("csv-load-btn");
     els.csvCancelBtn  = document.getElementById("csv-cancel-btn");
+    els.googleApiKey  = document.getElementById("google-api-key");
+    els.saveApiKeyBtn = document.getElementById("save-api-key-btn");
 
     MapLayer.initMap("map");
 
@@ -89,6 +99,23 @@
         if (els.csvFileInput.files && els.csvFileInput.files.length > 0) {
           handleFileSelected(els.csvFileInput.files[0]);
         }
+      });
+    }
+
+    /* Google API key — show placeholder if key already saved */
+    if (els.googleApiKey && getGoogleApiKey()) {
+      els.googleApiKey.placeholder = "Klucz zapisany (wpisz nowy by zmienić)";
+    }
+    if (els.saveApiKeyBtn) {
+      els.saveApiKeyBtn.addEventListener("click", function () {
+        var key = (els.googleApiKey ? els.googleApiKey.value : "").trim();
+        if (!key) return;
+        localStorage.setItem(GOOGLE_KEY_LS, key);
+        if (els.googleApiKey) {
+          els.googleApiKey.value = "";
+          els.googleApiKey.placeholder = "Klucz zapisany (wpisz nowy by zmienić)";
+        }
+        setStatus("Klucz Google Places API zapisany.");
       });
     }
 
@@ -858,60 +885,203 @@
     return out;
   }
 
+  /* -----------------------------------------------------------------------
+   * Google Places API — DK fetching
+   * --------------------------------------------------------------------- */
+
+  function getGoogleApiKey() {
+    return localStorage.getItem(GOOGLE_KEY_LS) || "";
+  }
+
+  function loadGoogleMapsApi(apiKey, onReady, onError) {
+    if (_gmapsLoaded && window.google && window.google.maps && window.google.maps.places) {
+      onReady();
+      return;
+    }
+    if (_gmapsLoadCallbacks !== null) {
+      _gmapsLoadCallbacks.push({ onReady: onReady, onError: onError });
+      return;
+    }
+    _gmapsLoadCallbacks = [{ onReady: onReady, onError: onError }];
+    var script = document.createElement("script");
+    script.src =
+      "https://maps.googleapis.com/maps/api/js?key=" +
+      encodeURIComponent(apiKey) +
+      "&libraries=places&callback=__gmapsReady";
+    script.onerror = function () {
+      var cbs = _gmapsLoadCallbacks || [];
+      _gmapsLoadCallbacks = null;
+      for (var i = 0; i < cbs.length; i++) {
+        if (cbs[i].onError) cbs[i].onError(new Error("Nie udalo sie zaladowac Google Maps API"));
+      }
+    };
+    window.__gmapsReady = function () {
+      _gmapsLoaded = true;
+      var cbs = _gmapsLoadCallbacks || [];
+      _gmapsLoadCallbacks = null;
+      delete window.__gmapsReady;
+      for (var i = 0; i < cbs.length; i++) cbs[i].onReady();
+    };
+    document.head.appendChild(script);
+  }
+
+  function extractCityFromGoogleAddress(addr) {
+    if (!addr) return "";
+    /* Most Polish Google addresses: "... XX-XXX CityName, Polska" */
+    var m = addr.match(/\b\d{2}-\d{3}\s+([^,]+)/);
+    if (m) return m[1].trim();
+    var parts = addr.split(",").map(function (p) { return p.trim(); });
+    if (parts.length >= 2) {
+      var last = parts[parts.length - 1];
+      if (/^polska$/i.test(last)) parts.pop();
+      if (parts.length >= 1) return parts[parts.length - 1];
+    }
+    return "";
+  }
+
+  function fetchDkFromGoogle(powiatKey, bounds, callback) {
+    var apiKey = getGoogleApiKey();
+    if (!apiKey || !bounds) {
+      callback(null, []);
+      return;
+    }
+
+    var cacheKey = GOOGLE_DK_CACHE_PREFIX + powiatKey;
+    try {
+      var raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        var obj = JSON.parse(raw);
+        if (Date.now() - obj.ts < GOOGLE_DK_TTL) {
+          callback(null, obj.data);
+          return;
+        }
+      }
+    } catch (e) { /* ignore parse errors */ }
+
+    var centerLat = (bounds.minlat + bounds.maxlat) / 2;
+    var centerLon = (bounds.minlon + bounds.maxlon) / 2;
+    var radiusM = Math.min(
+      50000,
+      Math.round(Geo.haversineKm(bounds.minlat, bounds.minlon, bounds.maxlat, bounds.maxlon) * 500)
+    );
+
+    loadGoogleMapsApi(apiKey, function () {
+      var mapDiv = document.createElement("div");
+      var gmap = new google.maps.Map(mapDiv, {
+        center: { lat: centerLat, lng: centerLon },
+        zoom: 10,
+      });
+      var service = new google.maps.places.PlacesService(gmap);
+      var center = new google.maps.LatLng(centerLat, centerLon);
+
+      var allResults = {};
+      var remaining = GOOGLE_DK_QUERIES.length;
+
+      function onQueryDone() {
+        remaining--;
+        if (remaining > 0) return;
+        var list = Object.keys(allResults).map(function (id) { return allResults[id]; });
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: list }));
+        } catch (e) { /* ignore quota errors */ }
+        callback(null, list);
+      }
+
+      GOOGLE_DK_QUERIES.forEach(function (query) {
+        service.textSearch(
+          { query: query, location: center, radius: radiusM },
+          function (results, status) {
+            if (
+              status === google.maps.places.PlacesServiceStatus.OK ||
+              status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS
+            ) {
+              (results || []).forEach(function (place) {
+                if (!place.place_id || !place.geometry) return;
+                if (/świetlic/i.test(place.name || "")) return;
+                var city = extractCityFromGoogleAddress(place.formatted_address || "");
+                allResults[place.place_id] = {
+                  rspo: "g_" + place.place_id,
+                  nazwa: place.name || "",
+                  typ: "DK",
+                  miejscowosc: city,
+                  gmina: "",
+                  powiat: powiatKey,
+                  powiat_key: powiatKey,
+                  adres: place.formatted_address || "",
+                  lat: place.geometry.location.lat(),
+                  lon: place.geometry.location.lng(),
+                  uczniowie: 0,
+                };
+              });
+            }
+            onQueryDone();
+          }
+        );
+      });
+    }, function (err) {
+      console.warn("Google Maps API loading failed:", err.message);
+      callback(null, []);
+    });
+  }
+
   /**
-   * Fetch DK from OSM and merge into facilities list (deduplication by name).
-   * Used when primary data comes from CSV (which may lack DK entries).
+   * Fetch DK from Google Places and merge into facilities list.
+   * Falls back to rendering without DK if no API key is set.
    */
   function processAndRenderWithDk(facilities, powiatKey, radiusKm, source) {
-    if (typeof Overpass.fetchCultureCentres !== "function") {
+    var apiKey = getGoogleApiKey();
+    if (!apiKey) {
+      setStatus(
+        "Brak klucza Google Places API — domy kultury pominięte. " +
+        "Wpisz klucz w dolnej części panelu."
+      );
       processAndRender(facilities, powiatKey, radiusKm, source);
       return;
     }
 
-    setStatus("Pobieranie domów kultury z OpenStreetMap...");
-    Overpass.fetchCultureCentres(powiatKey, function (err, osmDk) {
-      var merged = facilities;
-      if (!err && Array.isArray(osmDk) && osmDk.length > 0) {
-        /* Index existing DK by name to avoid duplicates */
-        var existingDkNames = {};
-        for (var i = 0; i < facilities.length; i++) {
-          if (facilities[i].typ === "DK") {
-            existingDkNames[normName(facilities[i].nazwa)] = true;
+    setStatus("Pobieranie domów kultury z Google Maps...");
+    Overpass.fetchPowiatBounds(powiatKey, function (err, bounds) {
+      fetchDkFromGoogle(powiatKey, bounds, function (gErr, googleDk) {
+        var merged = facilities;
+        if (!gErr && Array.isArray(googleDk) && googleDk.length > 0) {
+          var existingDkNames = {};
+          for (var i = 0; i < facilities.length; i++) {
+            if (facilities[i].typ === "DK") {
+              existingDkNames[normName(facilities[i].nazwa)] = true;
+            }
           }
-        }
 
-        /* Build city→gmina map from CSV facilities so OSM DK can inherit gmina.
-         * This prevents the same city appearing twice in the ranking (CSV group
-         * has gmina, OSM DK group has empty gmina → different keys). */
-        var cityGminaMap = {};
-        for (var j = 0; j < facilities.length; j++) {
-          var f = facilities[j];
-          var ck = normAddrKey(f.miejscowosc || "");
-          if (ck && f.gmina && !cityGminaMap[ck]) {
-            cityGminaMap[ck] = f.gmina;
+          /* Build city→gmina map so Google DK inherit gmina from CSV facilities.
+           * Prevents same city appearing twice in ranking with different gmina keys. */
+          var cityGminaMap = {};
+          for (var j = 0; j < facilities.length; j++) {
+            var f = facilities[j];
+            var ck = normAddrKey(f.miejscowosc || "");
+            if (ck && f.gmina && !cityGminaMap[ck]) {
+              cityGminaMap[ck] = f.gmina;
+            }
           }
-        }
 
-        var newDk = osmDk.filter(function (dk) {
-          return dk.typ === "DK" && !existingDkNames[normName(dk.nazwa)];
-        });
+          var newDk = googleDk.filter(function (dk) {
+            return !existingDkNames[normName(dk.nazwa)];
+          });
 
-        /* Assign gmina from CSV for same-city DK (prevents duplicate city rows) */
-        newDk.forEach(function (dk) {
-          if (!dk.gmina && dk.miejscowosc) {
-            var ck = normAddrKey(dk.miejscowosc);
-            if (cityGminaMap[ck]) dk.gmina = cityGminaMap[ck];
+          newDk.forEach(function (dk) {
+            if (!dk.gmina && dk.miejscowosc) {
+              var ck = normAddrKey(dk.miejscowosc);
+              if (cityGminaMap[ck]) dk.gmina = cityGminaMap[ck];
+            }
+          });
+
+          if (newDk.length > 0) {
+            merged = facilities.concat(newDk);
+            source = source + " + " + newDk.length + " DK z Google Maps";
           }
-        });
-
-        if (newDk.length > 0) {
-          merged = facilities.concat(newDk);
-          source = source + " + " + newDk.length + " DK z OSM";
+        } else if (gErr) {
+          console.warn("Nie udalo sie pobrac DK z Google Maps:", gErr.message);
         }
-      } else if (err) {
-        console.warn("Nie udalo sie pobrac DK z OSM:", err.message);
-      }
-      processAndRender(merged, powiatKey, radiusKm, source);
+        processAndRender(merged, powiatKey, radiusKm, source);
+      });
     });
   }
 
