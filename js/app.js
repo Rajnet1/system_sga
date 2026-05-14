@@ -1093,8 +1093,8 @@
 
       var mappedCount = state.currentMappedFacilities.length;
       var modeLabel = state.analysisMode === "county"
-        ? "powiat jako jedno miasto"
-        : "miasta w powiecie";
+        ? "powiat jako całość"
+        : "miejscowości w powiecie";
       var scopeLabel = state.analysisMode === "county"
         ? "cale terytorium powiatu"
         : "promien " + radiusKm + " km";
@@ -1102,11 +1102,11 @@
       if (state.analysisMode === "cities" && meta) {
         if (meta.cityFilterApplied) {
           cityFilterNote =
-            " | tylko miasta (" +
+            " | tylko miejscowosci OSM (" +
             meta.nonCityGroupsCount +
-            " miejscowosci poza filtrem)";
+            " poza filtrem)";
         } else {
-          cityFilterNote = " | filtr miast tymczasowo niedostepny";
+          cityFilterNote = " | filtr miejscowosci tymczasowo niedostepny";
         }
       }
 
