@@ -884,6 +884,9 @@
         uczniowieTotal += students;
       }
 
+      /* Skip cities with no schools or kindergartens in radius */
+      if (sp === 0 && prz === 0) continue;
+
       cities.push({
         key: g.key,
         name: g.name,
