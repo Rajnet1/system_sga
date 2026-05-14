@@ -54,7 +54,14 @@ func keyFilePath() string {
 	return filepath.Join(filepath.Dir(exe), "googlekey.enc")
 }
 
+// builtInKey is optionally embedded at build time:
+//   go build -ldflags="-X main.builtInKey=AIza..."
+var builtInKey string
+
 func loadAPIKey() string {
+	if k := strings.TrimSpace(builtInKey); k != "" {
+		return k
+	}
 	data, err := os.ReadFile(keyFilePath())
 	if err != nil {
 		return ""

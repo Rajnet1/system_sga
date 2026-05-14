@@ -4,3 +4,13 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Build outputs
+dist/
+*.exe
+sga_macos_*
+sga_windows*
+
+# API key — never commit
+apikey.txt
+googlekey.enc
