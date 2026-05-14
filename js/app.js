@@ -220,27 +220,15 @@
 
         Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
           if (err || !osmFacilities || osmFacilities.length === 0) {
-            /* Fallback: geocode addresses from CSV directly. */
-            setStatus(
-              "OpenStreetMap nie zwrocil danych (" +
-                (err ? err.message : "brak wynikow") +
-                "). Geokoduje adresy z CSV..."
-            );
-            enrichMissingCoordsFromNominatim(localFacilities, powiatKey, function (enriched, geoMeta) {
-              fillMissingFromPlaceCenters(enriched, powiatKey, function (finalFacilities, placeMeta) {
-                setLoading(false);
-                state.byPowiat[powiatKey] = finalFacilities;
-                var sourceFallback = withCoords > 0
-                  ? "lokalna baza RSPO + geokodowanie adresow"
-                  : "CSV + geokodowanie adresow";
-                if (geoMeta && geoMeta.requested > 0) {
-                  sourceFallback += " (" + geoMeta.resolved + "/" + geoMeta.requested + " uzupelnionych)";
-                }
-                if (placeMeta && placeMeta.resolved > 0) {
-                  sourceFallback += " + miejscowosci OSM (" + placeMeta.resolved + ")";
-                }
-                processAndRenderWithDk(finalFacilities, powiatKey, radiusKm, sourceFallback);
-              });
+            setStatus("Uzupelniam wspolrzedne ze srodkow miejscowosci OSM...");
+            fillMissingFromPlaceCenters(localFacilities, powiatKey, function (finalFacilities, placeMeta) {
+              setLoading(false);
+              state.byPowiat[powiatKey] = finalFacilities;
+              var sourceFallback = "CSV + miejscowosci OSM";
+              if (placeMeta && placeMeta.resolved > 0) {
+                sourceFallback += " (" + placeMeta.resolved + " uzupelnionych)";
+              }
+              processAndRenderWithDk(finalFacilities, powiatKey, radiusKm, sourceFallback);
             });
             return;
           }
@@ -255,24 +243,19 @@
           }
 
           setStatus(
-            "Dopasowano czesc placowek w OSM. Geokoduje pozostale adresy z CSV (" +
+            "Dopasowano czesc placowek w OSM. Uzupelniam pozostale ze srodkow miejscowosci (" +
               missingAfterMerge +
               ")..."
           );
 
-          enrichMissingCoordsFromNominatim(merged, powiatKey, function (enrichedMerged, geoMeta2) {
-            fillMissingFromPlaceCenters(enrichedMerged, powiatKey, function (finalMerged, placeMeta2) {
-              setLoading(false);
-              state.byPowiat[powiatKey] = finalMerged;
-              var source = "CSV + OpenStreetMap + geokodowanie adresow";
-              if (geoMeta2 && geoMeta2.requested > 0) {
-                source += " (" + geoMeta2.resolved + "/" + geoMeta2.requested + " uzupelnionych)";
-              }
-              if (placeMeta2 && placeMeta2.resolved > 0) {
-                source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
-              }
-              processAndRenderWithDk(finalMerged, powiatKey, radiusKm, source);
-            });
+          fillMissingFromPlaceCenters(merged, powiatKey, function (finalMerged, placeMeta2) {
+            setLoading(false);
+            state.byPowiat[powiatKey] = finalMerged;
+            var source = "CSV + OpenStreetMap";
+            if (placeMeta2 && placeMeta2.resolved > 0) {
+              source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
+            }
+            processAndRenderWithDk(finalMerged, powiatKey, radiusKm, source);
           });
         });
       });
