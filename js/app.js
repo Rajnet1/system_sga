@@ -988,12 +988,15 @@
     });
     sorted.forEach(function (f) {
       var li = document.createElement("li");
+      li.style.cursor = hasCoords(f) ? "pointer" : "default";
+
       var badge = document.createElement("span");
       badge.className = "type-badge " + f.typ;
       if (f.typ === "SP") badge.textContent = "SP";
       else if (f.typ === "PRZ") badge.textContent = "PRZ";
       else if (f.typ === "DK") badge.textContent = "DK";
       li.appendChild(badge);
+
       var wrap = document.createElement("div");
       var name = document.createElement("span");
       name.className = "facility-name";
@@ -1013,12 +1016,35 @@
         wrap.appendChild(students);
       }
       li.appendChild(wrap);
+
+      if (hasCoords(f)) {
+        li.addEventListener("click", (function (facility) {
+          return function (e) {
+            e.stopPropagation();
+            var key = MapLayer.markerKey(facility);
+            var entry = MapLayer.highlightMarker(key);
+            var lat = entry ? entry.lat : facility.lat;
+            var lon = entry ? entry.lon : facility.lon;
+            MapLayer.focusOn(lat, lon, 15);
+          };
+        })(f));
+      }
+
       ul.appendChild(li);
     });
     return ul;
   }
 
   function selectCity(cityKey) {
+    /* Toggle: clicking the active city collapses it */
+    if (state.activeCityKey === cityKey) {
+      state.activeCityKey = null;
+      var allCards = els.results.querySelectorAll(".city-card");
+      for (var k = 0; k < allCards.length; k++) allCards[k].classList.remove("active");
+      MapLayer.clearRadius();
+      return;
+    }
+
     var city = null;
     for (var i = 0; i < state.currentCities.length; i++) {
       if (state.currentCities[i].key === cityKey) {
