@@ -44,9 +44,9 @@
       return L.divIcon({
         className: "facility-marker",
         html:
-          '<div style="color:#d97706;font-size:16px;font-weight:bold;text-shadow:0 0 2px rgba(255,255,255,0.8),0 0 4px rgba(0,0,0,0.3);">★</div>',
-        iconSize: [18, 18],
-        iconAnchor: [9, 9],
+          '<div style="color:#d97706;font-size:20px;font-weight:bold;text-shadow:0 0 3px rgba(255,255,255,0.9),0 0 6px rgba(0,0,0,0.4);">★</div>',
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
       });
     }
     var color = typ === "SP" ? "#1565c0" : "#2e7d32";
@@ -55,9 +55,9 @@
       html:
         '<div style="background:' +
         color +
-        ';width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 2px rgba(0,0,0,0.5);"></div>',
-      iconSize: [16, 16],
-      iconAnchor: [8, 8],
+        ';width:16px;height:16px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.6),0 0 1px rgba(0,0,0,0.3);"></div>',
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
     });
   }
 
