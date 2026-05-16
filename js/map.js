@@ -205,10 +205,12 @@
       markersByKey[key] = { marker: marker, typ: f.typ, lat: item.lat, lon: item.lon };
 
       var typLabel = f.typ === "SP" ? "Szkoła podstawowa" : f.typ === "PRZ" ? "Przedszkole" : "Dom / Ośrodek Kultury";
-      var approxNote =
-        f.coords_source === "place_center"
-          ? '<br/><span style="color:#b45309;font-size:11px;">Lokalizacja przyblizona (srodek miejscowosci)</span>'
-          : "";
+      var approxNote = "";
+      if (f.coords_source === "place_center") {
+        approxNote = '<br/><span style="color:#b45309;font-size:11px;">Lokalizacja przyblizona (srodek miejscowosci)</span>';
+      } else if (f.coords_source === "geocoded") {
+        approxNote = '<br/><span style="color:#7b8794;font-size:11px;">Lokalizacja z geokodera (Photon)</span>';
+      }
       var uczniowieNote = (f.typ !== "DK" && f.uczniowie && f.uczniowie > 0)
         ? '<br/><span style="color:#1565c0;font-size:11px;">' + f.uczniowie + " uczniów</span>"
         : "";

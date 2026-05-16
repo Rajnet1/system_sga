@@ -189,15 +189,21 @@
 
         Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
           if (err || !osmFacilities || osmFacilities.length === 0) {
-            setStatus("Uzupelniam wspolrzedne ze srodkow miejscowosci OSM...");
-            fillMissingFromPlaceCenters(localFacilities, powiatKey, function (finalFacilities, placeMeta) {
-              setLoading(false);
-              state.byPowiat[powiatKey] = finalFacilities;
-              var sourceFallback = "CSV + miejscowosci OSM";
-              if (placeMeta && placeMeta.resolved > 0) {
-                sourceFallback += " (" + placeMeta.resolved + " uzupelnionych)";
-              }
-              processAndRenderWithDk(finalFacilities, powiatKey, radiusKm, sourceFallback);
+            setStatus("OSM niedostepne — geokoduje adresy przez Photon...");
+            geocodeMissingAddresses(localFacilities, powiatKey, function (afterGeo, geoMeta) {
+              setStatus("Uzupelniam wspolrzedne ze srodkow miejscowosci OSM...");
+              fillMissingFromPlaceCenters(afterGeo, powiatKey, function (finalFacilities, placeMeta) {
+                setLoading(false);
+                state.byPowiat[powiatKey] = finalFacilities;
+                var sourceFallback = "CSV";
+                if (geoMeta && geoMeta.resolved > 0) {
+                  sourceFallback += " + Photon (" + geoMeta.resolved + ")";
+                }
+                if (placeMeta && placeMeta.resolved > 0) {
+                  sourceFallback += " + miejscowosci OSM (" + placeMeta.resolved + ")";
+                }
+                processAndRenderWithDk(finalFacilities, powiatKey, radiusKm, sourceFallback);
+              });
             });
             return;
           }
@@ -211,20 +217,38 @@
             return;
           }
 
-          setStatus(
-            "Dopasowano czesc placowek w OSM. Uzupelniam pozostale ze srodkow miejscowosci (" +
-              missingAfterMerge +
-              ")..."
-          );
-
-          fillMissingFromPlaceCenters(merged, powiatKey, function (finalMerged, placeMeta2) {
-            setLoading(false);
-            state.byPowiat[powiatKey] = finalMerged;
-            var source = "CSV + OpenStreetMap";
-            if (placeMeta2 && placeMeta2.resolved > 0) {
-              source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
+          geocodeMissingAddresses(merged, powiatKey, function (afterGeocode, geocodeMeta) {
+            var missingAfterGeo = countMissingCoords(afterGeocode);
+            if (missingAfterGeo === 0) {
+              setLoading(false);
+              state.byPowiat[powiatKey] = afterGeocode;
+              var src = "CSV + OpenStreetMap";
+              if (geocodeMeta && geocodeMeta.resolved > 0) {
+                src += " + geokoder Photon (" + geocodeMeta.resolved + ")";
+              }
+              processAndRenderWithDk(afterGeocode, powiatKey, radiusKm, src);
+              return;
             }
-            processAndRenderWithDk(finalMerged, powiatKey, radiusKm, source);
+
+            setStatus(
+              "Geokoder pokryl " + (geocodeMeta ? geocodeMeta.resolved : 0) +
+                "/" + missingAfterMerge +
+                " adresow. Uzupelniam reszte (" + missingAfterGeo +
+                ") ze srodkow miejscowosci..."
+            );
+
+            fillMissingFromPlaceCenters(afterGeocode, powiatKey, function (finalMerged, placeMeta2) {
+              setLoading(false);
+              state.byPowiat[powiatKey] = finalMerged;
+              var source = "CSV + OpenStreetMap";
+              if (geocodeMeta && geocodeMeta.resolved > 0) {
+                source += " + Photon (" + geocodeMeta.resolved + ")";
+              }
+              if (placeMeta2 && placeMeta2.resolved > 0) {
+                source += " + miejscowosci OSM (" + placeMeta2.resolved + ")";
+              }
+              processAndRenderWithDk(finalMerged, powiatKey, radiusKm, source);
+            });
           });
         });
       });
@@ -345,6 +369,88 @@
       }
       callback(bounds, invalidated);
     });
+  }
+
+  /**
+   * For each facility missing coordinates but with a usable address
+   * (street + city), query Photon and write the result back onto the
+   * facility (in-place). Skips entries without a street component —
+   * Photon would resolve them to a city centroid, which is no better
+   * than the place_center fallback we run afterwards.
+   *
+   * callback(facilities, { requested, resolved, remainingMissing })
+   */
+  function geocodeMissingAddresses(facilities, powiatKey, callback) {
+    if (typeof callback !== "function") callback = function () {};
+    if (typeof Geocoder === "undefined" || !Geocoder.geocodeMany) {
+      callback(facilities, { requested: 0, resolved: 0, remainingMissing: countMissingCoords(facilities) });
+      return;
+    }
+
+    var missingIdx = [];
+    var addresses = [];
+    for (var i = 0; i < facilities.length; i++) {
+      var f = facilities[i];
+      if (!f || hasCoords(f)) continue;
+      var addr = buildGeocodeQuery(f);
+      if (!addr) continue;
+      missingIdx.push(i);
+      addresses.push(addr);
+    }
+
+    if (addresses.length === 0) {
+      callback(facilities, { requested: 0, resolved: 0, remainingMissing: countMissingCoords(facilities) });
+      return;
+    }
+
+    Overpass.fetchPowiatBounds(powiatKey, function (_err, bounds) {
+      var bias = null;
+      if (bounds) {
+        bias = {
+          lat: (bounds.minlat + bounds.maxlat) / 2,
+          lon: (bounds.minlon + bounds.maxlon) / 2,
+        };
+      }
+      setStatus("Geokoduje " + addresses.length + " adresow przez Photon (0/" + addresses.length + ")...");
+      Geocoder.geocodeMany(addresses, {
+        bias: bias,
+        bounds: bounds,
+        concurrency: 4,
+        onProgress: function (done, total) {
+          if (done % 5 === 0 || done === total) {
+            setStatus("Geokoduje adresy przez Photon (" + done + "/" + total + ")...");
+          }
+        },
+      }).then(function (results) {
+        var resolved = 0;
+        for (var m = 0; m < missingIdx.length; m++) {
+          var r = results[m];
+          if (!r) continue;
+          var idx = missingIdx[m];
+          facilities[idx].lat = r.lat;
+          facilities[idx].lon = r.lon;
+          facilities[idx].coords_source = "geocoded";
+          resolved++;
+        }
+        callback(facilities, {
+          requested: addresses.length,
+          resolved: resolved,
+          remainingMissing: countMissingCoords(facilities),
+        });
+      });
+    });
+  }
+
+  /** Compose an address string suitable for Photon (street + number, city). */
+  function buildGeocodeQuery(f) {
+    if (!f) return "";
+    /* facility.adres looks like "Lipowa 5, 20-001 Lublin". If it has both
+     * a street segment (with a number) and a city, use it directly. */
+    var addr = (f.adres || "").trim();
+    var hasStreet = /\d/.test(addr.split(",")[0] || "");
+    if (addr && hasStreet) return addr + ", Polska";
+    /* No usable street — skip; fall back to place_center later. */
+    return "";
   }
 
   function fillMissingFromPlaceCenters(facilities, powiatKey, callback) {
