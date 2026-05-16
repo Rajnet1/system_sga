@@ -770,43 +770,79 @@
   }
 
   /**
-   * Fetch DK from Google Places proxy and merge into facilities list.
+   * Enrich facilities with DK (domy kultury / culture centres).
+   * Tries Google Places first; falls back to OSM (Overpass) when Google
+   * returns nothing — typically because the API key is missing or rejected.
    */
   function processAndRenderWithDk(facilities, powiatKey, radiusKm, source) {
-    setStatus("Pobieranie domów kultury z Google Maps...");
+    setStatus("Pobieranie domów kultury...");
     Overpass.fetchPowiatBounds(powiatKey, function (err, bounds) {
       fetchDkFromGoogle(powiatKey, bounds, function (gErr, googleDk) {
-        var merged = facilities;
         if (!gErr && Array.isArray(googleDk) && googleDk.length > 0) {
-          var existingDkNames = {};
-          for (var i = 0; i < facilities.length; i++) {
-            if (facilities[i].typ === "DK") {
-              existingDkNames[normName(facilities[i].nazwa)] = true;
-            }
-          }
-          var cityGminaMap = {};
-          for (var j = 0; j < facilities.length; j++) {
-            var f = facilities[j];
-            var ck = normAddrKey(f.miejscowosc || "");
-            if (ck && f.gmina && !cityGminaMap[ck]) cityGminaMap[ck] = f.gmina;
-          }
-          var newDk = googleDk.filter(function (dk) {
-            return !existingDkNames[normName(dk.nazwa)];
-          });
-          newDk.forEach(function (dk) {
-            if (!dk.gmina && dk.miejscowosc) {
-              var ck = normAddrKey(dk.miejscowosc);
-              if (cityGminaMap[ck]) dk.gmina = cityGminaMap[ck];
-            }
-          });
-          if (newDk.length > 0) {
-            merged = facilities.concat(newDk);
-            source = source + " + " + newDk.length + " DK z Google Maps";
-          }
+          var withGoogle = mergeDkIntoFacilities(facilities, googleDk);
+          processAndRender(
+            withGoogle.facilities,
+            powiatKey,
+            radiusKm,
+            withGoogle.added > 0 ? source + " + " + withGoogle.added + " DK z Google Maps" : source
+          );
+          return;
         }
-        processAndRender(merged, powiatKey, radiusKm, source);
+        /* No Google DK (key missing / rejected / no results) — fall back to
+         * OSM via the already-cached Overpass.fetchFacilities call. */
+        Overpass.fetchFacilities(powiatKey, function (osmErr, osmAll) {
+          if (osmErr || !Array.isArray(osmAll) || osmAll.length === 0) {
+            processAndRender(facilities, powiatKey, radiusKm, source);
+            return;
+          }
+          var osmDk = osmAll.filter(function (f) { return f && f.typ === "DK" && hasCoords(f); });
+          if (osmDk.length === 0) {
+            processAndRender(facilities, powiatKey, radiusKm, source);
+            return;
+          }
+          var withOsm = mergeDkIntoFacilities(facilities, osmDk);
+          processAndRender(
+            withOsm.facilities,
+            powiatKey,
+            radiusKm,
+            withOsm.added > 0 ? source + " + " + withOsm.added + " DK z OSM" : source
+          );
+        });
       });
     });
+  }
+
+  /**
+   * Add DK entries from an external source into the facilities list,
+   * skipping ones whose normalised name already appears as a DK. Returns
+   * { facilities, added }.
+   */
+  function mergeDkIntoFacilities(facilities, externalDk) {
+    var existingDkNames = {};
+    for (var i = 0; i < facilities.length; i++) {
+      if (facilities[i] && facilities[i].typ === "DK") {
+        existingDkNames[normName(facilities[i].nazwa)] = true;
+      }
+    }
+    var cityGminaMap = {};
+    for (var j = 0; j < facilities.length; j++) {
+      var f = facilities[j];
+      var ck = normAddrKey((f && f.miejscowosc) || "");
+      if (ck && f.gmina && !cityGminaMap[ck]) cityGminaMap[ck] = f.gmina;
+    }
+    var newDk = externalDk.filter(function (dk) {
+      return dk && dk.nazwa && !existingDkNames[normName(dk.nazwa)];
+    });
+    newDk.forEach(function (dk) {
+      if (!dk.gmina && dk.miejscowosc) {
+        var k = normAddrKey(dk.miejscowosc);
+        if (cityGminaMap[k]) dk.gmina = cityGminaMap[k];
+      }
+    });
+    return {
+      facilities: newDk.length > 0 ? facilities.concat(newDk) : facilities,
+      added: newDk.length,
+    };
   }
 
   function processAndRender(facilities, powiatKey, radiusKm, source) {
