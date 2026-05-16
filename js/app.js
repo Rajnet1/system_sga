@@ -43,9 +43,6 @@
     els.csvParseStatus = document.getElementById("csv-parse-status");
     els.csvLoadBtn    = document.getElementById("csv-load-btn");
     els.csvCancelBtn  = document.getElementById("csv-cancel-btn");
-    els.googleApiKey  = document.getElementById("google-api-key");
-    els.saveApiKeyBtn = document.getElementById("save-api-key-btn");
-
     MapLayer.initMap("map");
 
     els.form.addEventListener("submit", function (e) {
@@ -88,23 +85,6 @@
         if (els.csvFileInput.files && els.csvFileInput.files.length > 0) {
           handleFileSelected(els.csvFileInput.files[0]);
         }
-      });
-    }
-
-    /* Google API key — localStorage */
-    var GOOGLE_KEY_LS = "google_places_api_key";
-    function getGoogleApiKey() { return localStorage.getItem(GOOGLE_KEY_LS) || ""; }
-
-    if (els.googleApiKey) {
-      els.googleApiKey.value = getGoogleApiKey() ? "••••••••" : "";
-    }
-    if (els.saveApiKeyBtn) {
-      els.saveApiKeyBtn.addEventListener("click", function () {
-        var key = (els.googleApiKey ? els.googleApiKey.value : "").trim();
-        if (!key || key === "••••••••") return;
-        localStorage.setItem(GOOGLE_KEY_LS, key);
-        if (els.googleApiKey) els.googleApiKey.value = "••••••••";
-        setStatus("Klucz Google Places API zapisany.");
       });
     }
 
@@ -528,7 +508,7 @@
   var _gmapsLoaded = false;
   var _gmapsCallbacks = [];
 
-  function loadGoogleMapsApi(apiKey, callback) {
+  function loadGoogleMapsApi(callback) {
     if (_gmapsLoaded) { callback(); return; }
     _gmapsCallbacks.push(callback);
     if (_gmapsCallbacks.length > 1) return; /* already loading */
@@ -539,7 +519,7 @@
     };
     var script = document.createElement("script");
     script.src = "https://maps.googleapis.com/maps/api/js?key=" +
-      encodeURIComponent(localStorage.getItem("google_places_api_key") || apiKey) +
+      encodeURIComponent(GOOGLE_API_KEY) +
       "&libraries=places&callback=__gmapsReady";
     script.async = true;
     document.head.appendChild(script);
@@ -559,8 +539,7 @@
   }
 
   function fetchDkFromGoogle(powiatKey, bounds, callback) {
-    var apiKey = localStorage.getItem("google_places_api_key") || "";
-    if (!apiKey || !bounds) { callback(null, []); return; }
+    if (!GOOGLE_API_KEY || !bounds) { callback(null, []); return; }
 
     var cacheKey = GOOGLE_DK_CACHE_PREFIX + powiatKey;
     try {
@@ -571,7 +550,7 @@
       }
     } catch (e) { /* ignore */ }
 
-    loadGoogleMapsApi(apiKey, function () {
+    loadGoogleMapsApi(function () {
       var centerLat = (bounds.minlat + bounds.maxlat) / 2;
       var centerLon = (bounds.minlon + bounds.maxlon) / 2;
       var radiusM = Math.min(
