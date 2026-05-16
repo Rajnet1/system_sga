@@ -506,22 +506,40 @@
    * --------------------------------------------------------------------- */
 
   var _gmapsLoaded = false;
+  var _gmapsFailed = false;
   var _gmapsCallbacks = [];
 
+  function flushGmapsCallbacks() {
+    _gmapsCallbacks.splice(0).forEach(function (cb) { cb(); });
+  }
+
   function loadGoogleMapsApi(callback) {
-    if (_gmapsLoaded) { callback(); return; }
+    if (_gmapsLoaded || _gmapsFailed) { callback(); return; }
     _gmapsCallbacks.push(callback);
     if (_gmapsCallbacks.length > 1) return; /* already loading */
     window.__gmapsReady = function () {
       _gmapsLoaded = true;
       delete window.__gmapsReady;
-      _gmapsCallbacks.splice(0).forEach(function (cb) { cb(); });
+      flushGmapsCallbacks();
+    };
+    /* Called by the Google Maps SDK when the API key is invalid/unauthorized.
+     * Mark as failed so subsequent calls short-circuit instead of re-triggering
+     * the InvalidKey warning. */
+    window.gm_authFailure = function () {
+      _gmapsFailed = true;
+      console.warn("Google Maps API auth failed — wzbogacanie DK z Google wylaczone.");
+      flushGmapsCallbacks();
     };
     var script = document.createElement("script");
     script.src = "https://maps.googleapis.com/maps/api/js?key=" +
       encodeURIComponent(GOOGLE_API_KEY) +
-      "&libraries=places&callback=__gmapsReady";
+      "&libraries=places&v=weekly&loading=async&callback=__gmapsReady";
     script.async = true;
+    script.onerror = function () {
+      _gmapsFailed = true;
+      console.warn("Nie udalo sie zaladowac Google Maps API.");
+      flushGmapsCallbacks();
+    };
     document.head.appendChild(script);
   }
 
@@ -539,7 +557,7 @@
   }
 
   function fetchDkFromGoogle(powiatKey, bounds, callback) {
-    if (!GOOGLE_API_KEY || !bounds) { callback(null, []); return; }
+    if (!GOOGLE_API_KEY || !bounds || _gmapsFailed) { callback(null, []); return; }
 
     var cacheKey = GOOGLE_DK_CACHE_PREFIX + powiatKey;
     try {
@@ -551,6 +569,11 @@
     } catch (e) { /* ignore */ }
 
     loadGoogleMapsApi(function () {
+      if (_gmapsFailed || !window.google || !google.maps || typeof google.maps.importLibrary !== "function") {
+        callback(null, []);
+        return;
+      }
+
       var centerLat = (bounds.minlat + bounds.maxlat) / 2;
       var centerLon = (bounds.minlon + bounds.maxlon) / 2;
       var radiusM = Math.min(
@@ -558,48 +581,77 @@
         Math.round(Geo.haversineKm(bounds.minlat, bounds.minlon, bounds.maxlat, bounds.maxlon) * 500)
       );
 
-      var dummyMap = new google.maps.Map(document.createElement("div"));
-      var service  = new google.maps.places.PlacesService(dummyMap);
-      var allResults = {};
-      var remaining  = GOOGLE_DK_QUERIES.length;
+      google.maps.importLibrary("places").then(function (placesLib) {
+        var Place = placesLib && placesLib.Place;
+        if (!Place || typeof Place.searchByText !== "function") {
+          callback(null, []);
+          return;
+        }
 
-      function onQueryDone() {
-        if (--remaining > 0) return;
-        var list = Object.keys(allResults).map(function (id) { return allResults[id]; });
-        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: list })); } catch (e) {}
-        callback(null, list);
-      }
+        var allResults = {};
+        var remaining = GOOGLE_DK_QUERIES.length;
 
-      GOOGLE_DK_QUERIES.forEach(function (query) {
-        service.textSearch({
-          query:    query,
-          location: new google.maps.LatLng(centerLat, centerLon),
-          radius:   radiusM,
-        }, function (results, status) {
-          var ST = google.maps.places.PlacesServiceStatus;
-          if (status === ST.OK || status === ST.ZERO_RESULTS) {
-            (results || []).forEach(function (place) {
-              if (!place.place_id || !place.geometry) return;
-              if (/świetlic/i.test(place.name || "")) return;
-              allResults[place.place_id] = {
-                rspo:        "g_" + place.place_id,
-                nazwa:       place.name || "",
+        function onQueryDone() {
+          if (--remaining > 0) return;
+          var list = Object.keys(allResults).map(function (id) { return allResults[id]; });
+          try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: list })); } catch (e) {}
+          callback(null, list);
+        }
+
+        GOOGLE_DK_QUERIES.forEach(function (query) {
+          Place.searchByText({
+            textQuery: query,
+            fields: ["id", "displayName", "location", "formattedAddress"],
+            locationBias: {
+              center: { lat: centerLat, lng: centerLon },
+              radius: radiusM,
+            },
+            language: "pl",
+            region: "pl",
+            maxResultCount: 20,
+          }).then(function (response) {
+            var places = (response && response.places) || [];
+            places.forEach(function (place) {
+              if (!place || !place.id || !place.location) return;
+              var name = readPlaceName(place);
+              if (!name || /świetlic/i.test(name)) return;
+              var loc = place.location;
+              var lat = typeof loc.lat === "function" ? loc.lat() : loc.lat;
+              var lon = typeof loc.lng === "function" ? loc.lng() : loc.lng;
+              if (typeof lat !== "number" || typeof lon !== "number") return;
+              var address = place.formattedAddress || "";
+              allResults[place.id] = {
+                rspo:        "g_" + place.id,
+                nazwa:       name,
                 typ:         "DK",
-                miejscowosc: extractCityFromGoogleAddress(place.formatted_address || ""),
+                miejscowosc: extractCityFromGoogleAddress(address),
                 gmina:       "",
                 powiat:      powiatKey,
                 powiat_key:  powiatKey,
-                adres:       place.formatted_address || "",
-                lat:         place.geometry.location.lat(),  /* funkcja w JS SDK */
-                lon:         place.geometry.location.lng(),
+                adres:       address,
+                lat:         lat,
+                lon:         lon,
                 uczniowie:   0,
               };
             });
-          }
-          onQueryDone();
+          }, function (err) {
+            console.warn("Google Places searchByText '" + query + "' nieudane:", err && err.message);
+          }).then(onQueryDone, onQueryDone);
         });
+      }, function (err) {
+        console.warn("Nie udalo sie zaladowac biblioteki Google Places:", err && err.message);
+        callback(null, []);
       });
     });
+  }
+
+  /* New Place API exposes displayName as a string (or LocalizedText with .text). */
+  function readPlaceName(place) {
+    var dn = place && place.displayName;
+    if (!dn) return "";
+    if (typeof dn === "string") return dn;
+    if (typeof dn.text === "string") return dn.text;
+    return String(dn);
   }
 
   /**
@@ -1505,11 +1557,6 @@
     }
 
     var hasCoords = facilities.some(function (f) { return hasCoordsColumns && f.lat != null && f.lon != null; });
-
-    if (facilities.length > 0 && !hasCoords) {
-      /* This is just a warning, not a critical error */
-      console.log("Warning: CSV imported but has no coordinates");
-    }
 
     return {
       facilities: facilities,
