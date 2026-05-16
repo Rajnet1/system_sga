@@ -91,36 +91,20 @@
       });
     }
 
-    /* Google API key — check server on load, save via POST /api/key */
-    fetch("/api/key-status")
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.hasKey && els.googleApiKey) {
-          els.googleApiKey.placeholder = "Klucz zapisany (wpisz nowy by zmienić)";
-        }
-      })
-      .catch(function () { /* running outside Go server — ignore */ });
+    /* Google API key — localStorage */
+    var GOOGLE_KEY_LS = "google_places_api_key";
+    function getGoogleApiKey() { return localStorage.getItem(GOOGLE_KEY_LS) || ""; }
 
+    if (els.googleApiKey) {
+      els.googleApiKey.value = getGoogleApiKey() ? "••••••••" : "";
+    }
     if (els.saveApiKeyBtn) {
       els.saveApiKeyBtn.addEventListener("click", function () {
         var key = (els.googleApiKey ? els.googleApiKey.value : "").trim();
-        if (!key) return;
-        fetch("/api/key", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: key }),
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.ok) {
-              if (els.googleApiKey) {
-                els.googleApiKey.value = "";
-                els.googleApiKey.placeholder = "Klucz zapisany (wpisz nowy by zmienić)";
-              }
-              setStatus("Klucz Google Places API zapisany.");
-            }
-          })
-          .catch(function () { setStatus("Błąd zapisu klucza.", true); });
+        if (!key || key === "••••••••") return;
+        localStorage.setItem(GOOGLE_KEY_LS, key);
+        if (els.googleApiKey) els.googleApiKey.value = "••••••••";
+        setStatus("Klucz Google Places API zapisany.");
       });
     }
 
@@ -538,8 +522,28 @@
   }
 
   /* -----------------------------------------------------------------------
-   * Google Places API — DK via local server proxy (/api/places)
+   * Google Places API — Google Maps JS SDK (no CORS, runs in browser)
    * --------------------------------------------------------------------- */
+
+  var _gmapsLoaded = false;
+  var _gmapsCallbacks = [];
+
+  function loadGoogleMapsApi(apiKey, callback) {
+    if (_gmapsLoaded) { callback(); return; }
+    _gmapsCallbacks.push(callback);
+    if (_gmapsCallbacks.length > 1) return; /* already loading */
+    window.__gmapsReady = function () {
+      _gmapsLoaded = true;
+      delete window.__gmapsReady;
+      _gmapsCallbacks.splice(0).forEach(function (cb) { cb(); });
+    };
+    var script = document.createElement("script");
+    script.src = "https://maps.googleapis.com/maps/api/js?key=" +
+      encodeURIComponent(localStorage.getItem("google_places_api_key") || apiKey) +
+      "&libraries=places&callback=__gmapsReady";
+    script.async = true;
+    document.head.appendChild(script);
+  }
 
   function extractCityFromGoogleAddress(addr) {
     if (!addr) return "";
@@ -555,7 +559,8 @@
   }
 
   function fetchDkFromGoogle(powiatKey, bounds, callback) {
-    if (!bounds) { callback(null, []); return; }
+    var apiKey = localStorage.getItem("google_places_api_key") || "";
+    if (!apiKey || !bounds) { callback(null, []); return; }
 
     var cacheKey = GOOGLE_DK_CACHE_PREFIX + powiatKey;
     try {
@@ -566,55 +571,55 @@
       }
     } catch (e) { /* ignore */ }
 
-    var centerLat = (bounds.minlat + bounds.maxlat) / 2;
-    var centerLon = (bounds.minlon + bounds.maxlon) / 2;
-    var radiusM = Math.min(
-      50000,
-      Math.round(Geo.haversineKm(bounds.minlat, bounds.minlon, bounds.maxlat, bounds.maxlon) * 500)
-    );
-    var location = centerLat + "," + centerLon;
+    loadGoogleMapsApi(apiKey, function () {
+      var centerLat = (bounds.minlat + bounds.maxlat) / 2;
+      var centerLon = (bounds.minlon + bounds.maxlon) / 2;
+      var radiusM = Math.min(
+        50000,
+        Math.round(Geo.haversineKm(bounds.minlat, bounds.minlon, bounds.maxlat, bounds.maxlon) * 500)
+      );
 
-    var allResults = {};
-    var remaining = GOOGLE_DK_QUERIES.length;
+      var dummyMap = new google.maps.Map(document.createElement("div"));
+      var service  = new google.maps.places.PlacesService(dummyMap);
+      var allResults = {};
+      var remaining  = GOOGLE_DK_QUERIES.length;
 
-    function onQueryDone() {
-      remaining--;
-      if (remaining > 0) return;
-      var list = Object.keys(allResults).map(function (id) { return allResults[id]; });
-      try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: list })); } catch (e) {}
-      callback(null, list);
-    }
+      function onQueryDone() {
+        if (--remaining > 0) return;
+        var list = Object.keys(allResults).map(function (id) { return allResults[id]; });
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: list })); } catch (e) {}
+        callback(null, list);
+      }
 
-    GOOGLE_DK_QUERIES.forEach(function (query) {
-      var qs = "query=" + encodeURIComponent(query) +
-               "&location=" + encodeURIComponent(location) +
-               "&radius=" + encodeURIComponent(String(radiusM));
-      fetch("/api/places?" + qs)
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.status === "OK" || data.status === "ZERO_RESULTS") {
-            (data.results || []).forEach(function (place) {
+      GOOGLE_DK_QUERIES.forEach(function (query) {
+        service.textSearch({
+          query:    query,
+          location: new google.maps.LatLng(centerLat, centerLon),
+          radius:   radiusM,
+        }, function (results, status) {
+          var ST = google.maps.places.PlacesServiceStatus;
+          if (status === ST.OK || status === ST.ZERO_RESULTS) {
+            (results || []).forEach(function (place) {
               if (!place.place_id || !place.geometry) return;
               if (/świetlic/i.test(place.name || "")) return;
-              var city = extractCityFromGoogleAddress(place.formatted_address || "");
               allResults[place.place_id] = {
-                rspo: "g_" + place.place_id,
-                nazwa: place.name || "",
-                typ: "DK",
-                miejscowosc: city,
-                gmina: "",
-                powiat: powiatKey,
-                powiat_key: powiatKey,
-                adres: place.formatted_address || "",
-                lat: place.geometry.location.lat,
-                lon: place.geometry.location.lng,
-                uczniowie: 0,
+                rspo:        "g_" + place.place_id,
+                nazwa:       place.name || "",
+                typ:         "DK",
+                miejscowosc: extractCityFromGoogleAddress(place.formatted_address || ""),
+                gmina:       "",
+                powiat:      powiatKey,
+                powiat_key:  powiatKey,
+                adres:       place.formatted_address || "",
+                lat:         place.geometry.location.lat(),  /* funkcja w JS SDK */
+                lon:         place.geometry.location.lng(),
+                uczniowie:   0,
               };
             });
           }
           onQueryDone();
-        })
-        .catch(function () { onQueryDone(); });
+        });
+      });
     });
   }
 
