@@ -73,8 +73,10 @@
     var params = [
       "q=" + encodeURIComponent(address),
       "limit=1",
-      "lang=pl",
     ];
+    /* Note: lang= only accepts en/fr/de/it — `pl` yields HTTP 400.
+     * The default returns names in their native language anyway, so
+     * Polish results come back in Polish. */
     if (bias && typeof bias.lat === "number" && typeof bias.lon === "number") {
       params.push("lat=" + bias.lat.toFixed(5));
       params.push("lon=" + bias.lon.toFixed(5));
