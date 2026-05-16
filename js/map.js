@@ -129,13 +129,17 @@
    * Zoom-responsive jitter
    *
    * Groups of facilities sharing the same rounded lat/lon get spread out
-   * in a circle with a CONSTANT pixel radius at the current zoom level.
-   * This ensures dots don't overlap regardless of zoom.
+   * so they don't overlap regardless of zoom. Small groups use a ring;
+   * large groups (e.g. dozens of facilities snapped to one place_center
+   * fallback) use a phyllotactic spiral so the outer radius grows like
+   * sqrt(count) instead of count, keeping the cluster compact.
    * --------------------------------------------------------------------- */
   function metersPerPixel(zoom) {
     /* Web Mercator: meters/px at latitude ~51°N (central Poland) */
     return (40075016.686 * Math.cos(51.0 * Math.PI / 180)) / Math.pow(2, zoom + 8);
   }
+
+  var GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
   function applyJitter(facilities, zoom) {
     var coordCount = {};
@@ -157,12 +161,21 @@
       var idx = coordIdx[k] || 0;
       coordIdx[k] = idx + 1;
 
-      /* Target: ~20 px arc between adjacent dot centres */
-      var radiusPx = Math.max(14, (20 * count) / (2 * Math.PI));
+      var radiusPx, angle;
+      if (count <= 8) {
+        /* Ring: ~20 px between adjacent dot centres */
+        radiusPx = Math.max(14, (20 * count) / (2 * Math.PI));
+        angle = (2 * Math.PI * idx) / count;
+      } else {
+        /* Phyllotactic spiral: r grows like sqrt(idx), outer radius stays
+         * compact even for ~100 co-located facilities (~70 px instead of
+         * ~315 px from the linear ring formula). */
+        radiusPx = 7 * Math.sqrt(idx + 1);
+        angle = idx * GOLDEN_ANGLE;
+      }
+
       var radiusMeters = radiusPx * mpp;
       var radiusDeg = radiusMeters / 111319.9;
-
-      var angle = (2 * Math.PI * idx) / count;
       return {
         orig: f,
         lat: f.lat + radiusDeg * Math.cos(angle),

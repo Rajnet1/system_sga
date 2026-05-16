@@ -635,7 +635,16 @@
               };
             });
           }, function (err) {
-            console.warn("Google Places searchByText '" + query + "' nieudane:", err && err.message);
+            var msg = (err && err.message) || String(err || "");
+            /* Detect "API key not valid" / INVALID_ARGUMENT and disable
+             * further Google calls for this session — otherwise every
+             * search triggers four 400s. */
+            if (!_gmapsFailed && /api key|invalid_argument|permission_denied/i.test(msg)) {
+              _gmapsFailed = true;
+              console.warn("Google Places API odrzucil klucz — wzbogacanie DK z Google wylaczone na te sesje.");
+            } else {
+              console.warn("Google Places searchByText '" + query + "' nieudane:", msg);
+            }
           }).then(onQueryDone, onQueryDone);
         });
       }, function (err) {
