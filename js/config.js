@@ -6,4 +6,4 @@
  * Wymagane API: Maps JavaScript API + Places API
  * =================================================== */
 
-var GOOGLE_API_KEY = "";
+var GOOGLE_API_KEY = "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";
