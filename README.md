@@ -78,9 +78,45 @@ python3 -m http.server 8000
 
 Otworz w przegladarce: <http://localhost:8000>.
 
-Mozesz takze wdrozyc repo na dowolny hosting statyczny (GitHub Pages,
-Netlify, Vercel, Cloudflare Pages) - wystarczy podlaczyc repozytorium, nie
-potrzeba zadnej konfiguracji buildu.
+## Hostowanie dla nieogarnietych klientow (GitHub Pages)
+
+Klient nie musi nic instalowac ani odpalac terminala - wystarczy ze raz
+opublikujesz aplikacje na GitHub Pages, dasz mu link i koniec.
+
+**Jednorazowa konfiguracja w GitHub:**
+
+1. Wejdz na <https://github.com/Rajnet1/system_sga/settings/pages>
+   (Settings -> Pages w sidebar).
+2. W "Source" wybierz **Deploy from a branch**.
+3. W "Branch" wybierz galaz na ktora trafiaja zmergowane zmiany (np.
+   `main` albo aktualnie defaultowa galaz repo). Folder zostaw na
+   **`/ (root)`**.
+4. Kliknij **Save**. Po ~1 minucie GitHub opublikuje strone i pokaze
+   zielony banner z URL-em w stylu:
+
+   ```
+   https://rajnet1.github.io/system_sga/
+   ```
+
+**Co dostaje klient:**
+- Otwiera ten URL w przegladarce (Chrome / Safari / Edge - bez znaczenia).
+- Strona dziala od razu, bez instalacji.
+- Klikasz **+ CSV**, zaciagasz plik z RSPO, koniec.
+- Brak problemu z CORS (Origin null) bo strona jest serwowana po HTTPS.
+
+**Aktualizacje** - kazdy push do hostowanej galezi auto-publikuje sie
+w ~1 minute. Klient po prostu odswieza strone (Ctrl/Cmd+Shift+R zeby
+ominac cache).
+
+**Jesli cos sie wywali** - klient widzi modal **`Diagnostyka aplikacji`**
+(prawy dolny rog), klika **Kopiuj wszystko** i przesyla wklejony log -
+masz pelne dane do diagnostyki bez konsoli przegladarki.
+
+## Inne hostingi
+
+Mozesz takze wdrozyc repo na Netlify, Vercel albo Cloudflare Pages - 
+wystarczy podlaczyc repozytorium, nie potrzeba zadnej konfiguracji
+buildu (statyczne pliki).
 
 ## Struktura projektu
 
