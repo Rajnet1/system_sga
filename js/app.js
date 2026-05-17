@@ -795,7 +795,12 @@
             processAndRender(facilities, powiatKey, radiusKm, source);
             return;
           }
-          var osmDk = osmAll.filter(function (f) { return f && f.typ === "DK" && hasCoords(f); });
+          var osmDk = osmAll.filter(function (f) {
+            if (!f || f.typ !== "DK" || !hasCoords(f)) return false;
+            /* Skip świetlice (small day-rooms): same filter as the Google path. */
+            if (/świetlic/i.test(f.nazwa || "")) return false;
+            return true;
+          });
           if (osmDk.length === 0) {
             processAndRender(facilities, powiatKey, radiusKm, source);
             return;
