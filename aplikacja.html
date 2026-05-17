@@ -11,7 +11,7 @@
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
-  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/styles.css?v=20260516-1" />
 </head>
 <body>
   <aside class="sidebar">
@@ -105,6 +105,17 @@
 
   <main id="map" class="map"></main>
 
+  <!-- Full-screen loading overlay shown while a search is in progress -->
+  <div id="loading-overlay" class="loading-overlay" hidden aria-live="polite" aria-busy="true">
+    <div class="loading-overlay__box" role="status">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div id="loading-stage" class="loading-overlay__stage">Ładowanie...</div>
+      <div id="loading-progress" class="loading-overlay__progress" hidden>
+        <div id="loading-progress-bar" class="loading-overlay__progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
@@ -115,6 +126,6 @@
   <script src="js/geocode.js?v=20260516-2"></script>
   <script src="js/map.js?v=20260516-3"></script>
   <script src="js/overpass.js?v=20260516-1"></script>
-  <script src="js/app.js?v=20260516-5"></script>
+  <script src="js/app.js?v=20260516-6"></script>
 </body>
 </html>

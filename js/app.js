@@ -43,6 +43,10 @@
     els.csvParseStatus = document.getElementById("csv-parse-status");
     els.csvLoadBtn    = document.getElementById("csv-load-btn");
     els.csvCancelBtn  = document.getElementById("csv-cancel-btn");
+    els.loadingOverlay = document.getElementById("loading-overlay");
+    els.loadingStage   = document.getElementById("loading-stage");
+    els.loadingProgress = document.getElementById("loading-progress");
+    els.loadingProgressBar = document.getElementById("loading-progress-bar");
     MapLayer.initMap("map");
 
     els.form.addEventListener("submit", function (e) {
@@ -100,6 +104,13 @@
       els.status.textContent = text || "";
       els.status.classList.toggle("error", Boolean(isError));
     }
+    if (isError) {
+      /* Error ends the search — drop the loading overlay if it's up. */
+      if (state.searching) setLoading(false);
+    } else if (state.searching && text && els.loadingStage) {
+      /* Mirror progress text into the loading overlay while it's showing. */
+      els.loadingStage.textContent = text;
+    }
   }
 
   function setLoading(loading) {
@@ -109,6 +120,37 @@
       els.submitBtn.disabled = loading || !els.powiatInput.value;
       els.submitBtn.textContent = loading ? "Ładowanie..." : "Szukaj";
     }
+    if (loading) {
+      showLoadingOverlay();
+    } else {
+      hideLoadingOverlay();
+    }
+  }
+
+  function showLoadingOverlay() {
+    if (!els.loadingOverlay) return;
+    setLoadingProgress(null);
+    if (els.loadingStage) els.loadingStage.textContent = "Ładowanie...";
+    els.loadingOverlay.removeAttribute("hidden");
+  }
+
+  function hideLoadingOverlay() {
+    if (!els.loadingOverlay) return;
+    els.loadingOverlay.setAttribute("hidden", "");
+    setLoadingProgress(null);
+  }
+
+  /** Show progress bar with percent (0-100), or pass null to hide it. */
+  function setLoadingProgress(percent) {
+    if (!els.loadingProgress || !els.loadingProgressBar) return;
+    if (percent == null) {
+      els.loadingProgress.setAttribute("hidden", "");
+      els.loadingProgressBar.style.width = "0%";
+      return;
+    }
+    var clamped = Math.max(0, Math.min(100, percent));
+    els.loadingProgress.removeAttribute("hidden");
+    els.loadingProgressBar.style.width = clamped.toFixed(1) + "%";
   }
 
   /* -----------------------------------------------------------------------
@@ -160,6 +202,11 @@
     state.currentRadiusKm = radiusKm;
     /* state.analysisMode jest ustawiany automatycznie podczas importu CSV */
 
+    /* Show the full-screen loading overlay for the entire pipeline.
+     * setLoading(false) is called at the end of processAndRender. */
+    setLoading(true);
+    setStatus("Przygotowuje wyszukiwanie...");
+
     /* If we have local data for this powiat, use it immediately.
      * BUT: if none of the local facilities have coordinates (e.g. CSV import
      * without lat/lon), fall back to Overpass to get coords and merge them in
@@ -182,7 +229,6 @@
         }
 
         /* Local data is partially/fully without coordinates — enrich from OSM. */
-        setLoading(true);
         setStatus("Uzupelniam brakujace wspolrzedne z OpenStreetMap...");
         els.results.innerHTML = "";
         MapLayer.clear();
@@ -193,7 +239,6 @@
             geocodeMissingAddresses(localFacilities, powiatKey, function (afterGeo, geoMeta) {
               setStatus("Uzupelniam wspolrzedne ze srodkow miejscowosci OSM...");
               fillMissingFromPlaceCenters(afterGeo, powiatKey, function (finalFacilities, placeMeta) {
-                setLoading(false);
                 state.byPowiat[powiatKey] = finalFacilities;
                 var sourceFallback = "CSV";
                 if (geoMeta && geoMeta.resolved > 0) {
@@ -211,7 +256,6 @@
           var merged = mergeCoordsByName(localFacilities, osmFacilities);
           var missingAfterMerge = countMissingCoords(merged);
           if (missingAfterMerge === 0) {
-            setLoading(false);
             state.byPowiat[powiatKey] = merged;
             processAndRenderWithDk(merged, powiatKey, radiusKm, "CSV + OpenStreetMap (uzupelnione wspolrzedne)");
             return;
@@ -220,7 +264,6 @@
           geocodeMissingAddresses(merged, powiatKey, function (afterGeocode, geocodeMeta) {
             var missingAfterGeo = countMissingCoords(afterGeocode);
             if (missingAfterGeo === 0) {
-              setLoading(false);
               state.byPowiat[powiatKey] = afterGeocode;
               var src = "CSV + OpenStreetMap";
               if (geocodeMeta && geocodeMeta.resolved > 0) {
@@ -238,7 +281,6 @@
             );
 
             fillMissingFromPlaceCenters(afterGeocode, powiatKey, function (finalMerged, placeMeta2) {
-              setLoading(false);
               state.byPowiat[powiatKey] = finalMerged;
               var source = "CSV + OpenStreetMap";
               if (geocodeMeta && geocodeMeta.resolved > 0) {
@@ -256,13 +298,11 @@
     }
 
     /* Otherwise fetch from Overpass */
-    setLoading(true);
     setStatus("Pobieranie danych z OpenStreetMap dla powiatu: " + rawPowiat + "...");
     els.results.innerHTML = "";
     MapLayer.clear();
 
     Overpass.fetchFacilities(powiatKey, function (err, facilities) {
-      setLoading(false);
       if (err) {
         setStatus(
           "Błąd pobierania z Overpass: " + err.message + ". Spróbuj ponownie.",
@@ -412,16 +452,19 @@
         };
       }
       setStatus("Geokoduje " + addresses.length + " adresow przez Photon (0/" + addresses.length + ")...");
+      setLoadingProgress(0);
       Geocoder.geocodeMany(addresses, {
         bias: bias,
         bounds: bounds,
         concurrency: 4,
         onProgress: function (done, total) {
+          setLoadingProgress(total > 0 ? (done * 100) / total : null);
           if (done % 5 === 0 || done === total) {
             setStatus("Geokoduje adresy przez Photon (" + done + "/" + total + ")...");
           }
         },
       }).then(function (results) {
+        setLoadingProgress(null);
         var resolved = 0;
         for (var m = 0; m < missingIdx.length; m++) {
           var r = results[m];
@@ -894,6 +937,8 @@
           selectCity(city.key);
         });
       }
+      /* End of the pipeline — drop the overlay. */
+      setLoading(false);
     });
   }
 
