@@ -11,7 +11,7 @@
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
-  <link rel="stylesheet" href="css/styles.css?v=20260516-1" />
+  <link rel="stylesheet" href="css/styles.css?v=20260516-2" />
 </head>
 <body>
   <aside class="sidebar">
@@ -105,6 +105,33 @@
 
   <main id="map" class="map"></main>
 
+  <!-- Diagnostic log button (floating, bottom-right) -->
+  <button type="button" id="log-button" class="log-button" title="Pokaz logi diagnostyczne">
+    <span aria-hidden="true">&#128203;</span>
+    <span class="log-button__label">Logi</span>
+    <span id="log-badge" class="log-badge" hidden></span>
+  </button>
+
+  <!-- Diagnostic log modal -->
+  <div id="log-modal" class="log-modal" hidden aria-modal="true" role="dialog" aria-labelledby="log-modal-title">
+    <div class="log-modal__box">
+      <div class="log-modal__header">
+        <strong id="log-modal-title">Diagnostyka aplikacji</strong>
+        <button type="button" id="log-modal-close" class="log-modal__close" title="Zamknij">&times;</button>
+      </div>
+      <p class="log-modal__hint">
+        Wszystkie zdarzenia i bledy z tej sesji. Kliknij <strong>Kopiuj wszystko</strong>
+        i wyslij to programisce zeby moc szybko zdiagnozowac problem.
+      </p>
+      <div id="log-modal-body" class="log-modal__body"></div>
+      <div id="log-modal-empty" class="log-modal__empty">Brak zdarzen — wszystko dziala.</div>
+      <div class="log-modal__actions">
+        <button type="button" id="log-modal-copy" class="log-modal__copy-btn">Kopiuj wszystko</button>
+        <button type="button" id="log-modal-clear" class="log-modal__clear-btn">Wyczysc</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Full-screen loading overlay shown while a search is in progress -->
   <div id="loading-overlay" class="loading-overlay" hidden aria-live="polite" aria-busy="true">
     <div class="loading-overlay__box" role="status">
@@ -121,11 +148,12 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
+  <script src="js/logger.js?v=20260516-1"></script>
   <script src="js/config.js"></script>
   <script src="js/geo.js?v=20260512-4"></script>
-  <script src="js/geocode.js?v=20260516-2"></script>
+  <script src="js/geocode.js?v=20260516-3"></script>
   <script src="js/map.js?v=20260516-3"></script>
-  <script src="js/overpass.js?v=20260516-1"></script>
-  <script src="js/app.js?v=20260516-6"></script>
+  <script src="js/overpass.js?v=20260516-2"></script>
+  <script src="js/app.js?v=20260516-7"></script>
 </body>
 </html>

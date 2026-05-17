@@ -202,6 +202,8 @@
     state.currentRadiusKm = radiusKm;
     /* state.analysisMode jest ustawiany automatycznie podczas importu CSV */
 
+    Log.info("Start wyszukiwania: powiat=" + powiatKey + ", promien=" + radiusKm + "km, tryb=" + state.analysisMode);
+
     /* Show the full-screen loading overlay for the entire pipeline.
      * setLoading(false) is called at the end of processAndRender. */
     setLoading(true);
@@ -235,6 +237,8 @@
 
         Overpass.fetchFacilities(powiatKey, function (err, osmFacilities) {
           if (err || !osmFacilities || osmFacilities.length === 0) {
+            if (err) Log.warn("Overpass fetchFacilities failed: " + err.message);
+            else Log.warn("Overpass zwrocil 0 placowek dla powiatu " + powiatKey);
             setStatus("OSM niedostepne — geokoduje adresy przez Photon...");
             geocodeMissingAddresses(localFacilities, powiatKey, function (afterGeo, geoMeta) {
               setStatus("Uzupelniam wspolrzedne ze srodkow miejscowosci OSM...");
@@ -304,6 +308,7 @@
 
     Overpass.fetchFacilities(powiatKey, function (err, facilities) {
       if (err) {
+        Log.error("Overpass fetchFacilities (samodzielny) nieudany: " + err.message);
         setStatus(
           "Błąd pobierania z Overpass: " + err.message + ". Spróbuj ponownie.",
           true
@@ -311,6 +316,7 @@
         return;
       }
       if (!facilities || facilities.length === 0) {
+        Log.warn("Overpass: 0 placowek dla powiatu " + powiatKey);
         setStatus(
           "Nie znaleziono placówek dla powiatu \"" + powiatKey + "\". Sprawdź pisownię.",
           true
@@ -318,6 +324,7 @@
         return;
       }
 
+      Log.info("Overpass: " + facilities.length + " placowek dla powiatu " + powiatKey);
       state.byPowiat[powiatKey] = facilities;
       processAndRender(facilities, powiatKey, radiusKm, "OpenStreetMap (Overpass)");
     });
@@ -475,6 +482,7 @@
           facilities[idx].coords_source = "geocoded";
           resolved++;
         }
+        Log.info("Photon geocoding: " + resolved + "/" + addresses.length + " adresow rozwiazanych");
         callback(facilities, {
           requested: addresses.length,
           resolved: resolved,
@@ -646,7 +654,9 @@
       copy.lon = pick.lon;
       return copy;
     });
-    console.log("mergeCoordsByName: matched " + matched + "/" + local.length + " facilities");
+    if (typeof Log !== "undefined") {
+      Log.info("OSM name-match: " + matched + "/" + local.length + " placowek dopasowanych po nazwie");
+    }
     return out;
   }
 
@@ -676,7 +686,7 @@
      * the InvalidKey warning. */
     window.gm_authFailure = function () {
       _gmapsFailed = true;
-      console.warn("Google Maps API auth failed — wzbogacanie DK z Google wylaczone.");
+      Log.error("Google Maps API: gm_authFailure — klucz odrzucony przez SDK. Wzbogacanie DK z Google wylaczone.");
       flushGmapsCallbacks();
     };
     var script = document.createElement("script");
@@ -686,7 +696,7 @@
     script.async = true;
     script.onerror = function () {
       _gmapsFailed = true;
-      console.warn("Nie udalo sie zaladowac Google Maps API.");
+      Log.error("Nie udalo sie zaladowac Google Maps API (script onerror).");
       flushGmapsCallbacks();
     };
     document.head.appendChild(script);
@@ -790,9 +800,9 @@
              * search triggers four 400s. */
             if (!_gmapsFailed && /api key|invalid_argument|permission_denied/i.test(msg)) {
               _gmapsFailed = true;
-              console.warn("Google Places API odrzucil klucz — wzbogacanie DK z Google wylaczone na te sesje.");
+              Log.error("Google Places: klucz odrzucony (Places API New nieukluczone?). Wzbogacanie DK z Google wylaczone na sesje.", msg);
             } else {
-              console.warn("Google Places searchByText '" + query + "' nieudane:", msg);
+              Log.warn("Google Places searchByText '" + query + "' nieudane: " + msg);
             }
           }).then(onQueryDone, onQueryDone);
         });
@@ -823,6 +833,7 @@
       fetchDkFromGoogle(powiatKey, bounds, function (gErr, googleDk) {
         if (!gErr && Array.isArray(googleDk) && googleDk.length > 0) {
           var withGoogle = mergeDkIntoFacilities(facilities, googleDk);
+          Log.info("DK z Google Maps: " + withGoogle.added + " nowych (znalezionych " + googleDk.length + ")");
           processAndRender(
             withGoogle.facilities,
             powiatKey,
@@ -835,6 +846,7 @@
          * OSM via the already-cached Overpass.fetchFacilities call. */
         Overpass.fetchFacilities(powiatKey, function (osmErr, osmAll) {
           if (osmErr || !Array.isArray(osmAll) || osmAll.length === 0) {
+            Log.warn("DK: brak danych z Google i z OSM — placowki bez DK");
             processAndRender(facilities, powiatKey, radiusKm, source);
             return;
           }
@@ -845,10 +857,12 @@
             return true;
           });
           if (osmDk.length === 0) {
+            Log.info("DK z OSM: 0 (po filtrze swietlic)");
             processAndRender(facilities, powiatKey, radiusKm, source);
             return;
           }
           var withOsm = mergeDkIntoFacilities(facilities, osmDk);
+          Log.info("DK z OSM: " + withOsm.added + " nowych (znalezionych " + osmDk.length + ", po filtrze swietlic)");
           processAndRender(
             withOsm.facilities,
             powiatKey,
@@ -937,6 +951,8 @@
           selectCity(city.key);
         });
       }
+      Log.info("Wyrenderowano: " + facilities.length + " placowek, " + mappedCount + " na mapie, " +
+        cities.length + " pozycji rankingu | zrodlo: " + source);
       /* End of the pipeline — drop the overlay. */
       setLoading(false);
     });
@@ -1396,6 +1412,7 @@
     var result = parseCsvText(csv);
 
     if (result.error) {
+      Log.error("CSV parse failed: " + result.error);
       setCsvStatus("Blad parsowania: " + result.error, "err");
       return;
     }
@@ -1404,9 +1421,16 @@
       if (result.unknownTypes && result.unknownTypes.length > 0) {
         errorMsg += " Znalezione typy: " + result.unknownTypes.join(", ") + ".";
       }
+      Log.error("CSV import: 0 facilities recognised", { unknownTypes: result.unknownTypes });
       setCsvStatus(errorMsg, "err");
       return;
     }
+
+    Log.info("CSV imported: " + result.facilities.length + " facilities (" +
+      result.sp + " SP, " + result.prz + " PRZ, " + (result.dk || 0) + " DK)" +
+      ", powiat=" + (result.powiatKey || "?") +
+      ", coords=" + (result.hasCoords ? "tak" : "nie") +
+      ", students=" + (result.hasStudents ? "tak" : "nie"));
 
     /* Inject into state — group by powiat */
     var fallbackKey = result.powiatKey || "csv-import";

@@ -115,7 +115,8 @@
       })
       .catch(function (err) {
         /* Don't cache transient errors — try again next time. */
-        console.info("Photon geocode '" + address + "' failed: " + (err && err.message));
+        var msg = (err && err.message) || String(err);
+        if (typeof Log !== "undefined") Log.warn("Photon geocode '" + address + "' nieudany: " + msg);
         return null;
       });
   }

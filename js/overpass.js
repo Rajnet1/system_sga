@@ -70,7 +70,7 @@
       .then(function (r) {
         if (r.status === 429 || r.status >= 500) {
           /* Server-side error — try next mirror (informational, not an error) */
-          console.info("Overpass " + r.status + " from " + endpoint + ", trying next mirror...");
+          if (typeof Log !== "undefined") Log.info("Overpass " + r.status + " z " + endpoint + " — probuje nastepne lustro");
           return tryEndpoints(queue, ql);
         }
         if (!r.ok) {
@@ -81,7 +81,7 @@
       .catch(function (err) {
         /* Network error / timeout — try next mirror (informational, not an error) */
         if (queue.length > 0) {
-          console.info("Overpass " + endpoint + " unreachable (" + err.message + "), trying next mirror...");
+          if (typeof Log !== "undefined") Log.info("Overpass " + endpoint + " niedostepny (" + err.message + ") — probuje nastepne lustro");
           return tryEndpoints(queue, ql);
         }
         return Promise.reject(err);
