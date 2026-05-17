@@ -2,122 +2,30 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="refresh" content="0; url=aplikacja.html" />
   <title>Wyszukiwarka szkol, przedszkoli i domow kultury</title>
-
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
-  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="canonical" href="aplikacja.html" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f5f7fa;
+      color: #1f2933;
+    }
+    a { color: #1565c0; }
+  </style>
 </head>
 <body>
-  <aside class="sidebar">
-    <header class="sidebar__header">
-      <h1>Szkoly, przedszkola &amp; domy kultury</h1>
-      <p class="sidebar__subtitle">Ranking miejscowości w powiecie wg liczby placówek w promieniu.</p>
-    </header>
-
-    <form id="search-form" class="search-form" autocomplete="off">
-      <!-- powiat-input hidden — wypełniany automatycznie z CSV -->
-      <input type="hidden" id="powiat-input" name="powiat" />
-
-      <!-- Info o województwie/powiecie z załadowanego CSV -->
-      <div id="csv-info" class="csv-info" hidden></div>
-
-      <label class="field">
-        <span>Promien (km)</span>
-        <input
-          type="number"
-          id="radius-input"
-          name="radius"
-          value="5"
-          min="0.5"
-          step="0.5"
-          required
-        />
-      </label>
-
-      <div class="form-row">
-        <button type="submit" id="submit-btn" disabled>Szukaj</button>
-        <button type="button" id="csv-import-btn" class="btn-secondary" title="Zaladuj plik CSV z RSPO">
-          + CSV
-        </button>
-      </div>
-    </form>
-
-    <!-- Modal: drag-and-drop / wybor pliku CSV z RSPO -->
-    <div id="csv-modal" class="csv-modal" hidden>
-      <div class="csv-modal__box">
-        <div class="csv-modal__header">
-          <strong>Zaladuj plik CSV z RSPO</strong>
-          <button type="button" id="csv-modal-close" class="csv-modal__close" title="Zamknij">&times;</button>
-        </div>
-        <p class="csv-modal__hint">
-          Pobierz CSV ze strony
-          <a href="https://rspo.gov.pl/zaawansowana" target="_blank" rel="noopener">rspo.gov.pl/zaawansowana</a>
-          (filtr: Szkola podstawowa + Przedszkole + Dom kultury). Nastepnie przeciagnij plik na pole ponizej
-          lub kliknij aby wybrac.
-        </p>
-
-        <!-- Drag-and-drop zone -->
-        <div id="csv-dropzone" class="csv-dropzone">
-          <input type="file" id="csv-file-input" accept=".csv,.txt" style="display:none" />
-          <div class="csv-dropzone__icon">&#128196;</div>
-          <div class="csv-dropzone__text">
-            <strong>Przeciagnij plik CSV tutaj</strong><br/>
-            <span>lub kliknij, aby wybrac plik z dysku</span>
-          </div>
-          <div id="csv-filename" class="csv-dropzone__filename"></div>
-        </div>
-
-        <div id="csv-parse-status" class="csv-modal__parse-status"></div>
-        <div class="csv-modal__actions">
-          <button type="button" id="csv-load-btn" class="csv-modal__load-btn" disabled>Zaladuj dane</button>
-          <button type="button" id="csv-cancel-btn" class="csv-modal__cancel-btn">Anuluj</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="status" class="status">Ładowanie...</div>
-
-    <section id="results" class="results" aria-live="polite"></section>
-
-    <div class="api-key-row">
-      <input type="password" id="google-api-key" placeholder="Klucz Google Places API" autocomplete="off" />
-      <button type="button" id="save-api-key-btn">Zapisz</button>
-    </div>
-
-    <footer class="sidebar__footer">
-      <small>
-        Dane: <a href="https://rspo.gov.pl" target="_blank" rel="noopener">RSPO</a> /
-        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
-        <button
-          id="clear-cache-btn"
-          type="button"
-          title="Wyczyść pamięć podręczną Overpass (odświeży dane)"
-          style="
-            margin-left:6px;background:none;border:none;color:#7b8794;
-            cursor:pointer;font-size:11px;padding:0;text-decoration:underline;
-          "
-          onclick="var n=Overpass.clearCache();alert('Wyczyszczono '+n+' wpisów cache. Dane zostaną pobrane ponownie przy następnym wyszukiwaniu.');"
-        >wyczyść cache</button>
-      </small>
-    </footer>
-  </aside>
-
-  <main id="map" class="map"></main>
-
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
-  <script src="js/geo.js?v=20260512-4"></script>
-  <script src="js/map.js?v=20260512-4"></script>
-  <script src="js/overpass.js?v=20260514-3"></script>
-  <script src="js/app.js?v=20260514-3"></script>
+  <noscript>
+    <p>Przekierowanie wymaga JavaScript albo odswiez strone. Przejdz do
+      <a href="aplikacja.html">aplikacja.html</a>.</p>
+  </noscript>
+  <p>Ladowanie&hellip; Jesli strona sie nie odswiezy, kliknij
+    <a href="aplikacja.html">aplikacja.html</a>.</p>
+  <script>window.location.replace("aplikacja.html");</script>
 </body>
 </html>

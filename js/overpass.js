@@ -69,8 +69,8 @@
     return fetchWithTimeout(endpoint, ql, FETCH_TIMEOUT_MS)
       .then(function (r) {
         if (r.status === 429 || r.status >= 500) {
-          /* Server-side error — try next mirror */
-          console.warn("Overpass " + r.status + " from " + endpoint + ", trying next...");
+          /* Server-side error — try next mirror (informational, not an error) */
+          if (typeof Log !== "undefined") Log.info("Overpass " + r.status + " z " + endpoint + " — probuje nastepne lustro");
           return tryEndpoints(queue, ql);
         }
         if (!r.ok) {
@@ -79,9 +79,9 @@
         return r.json();
       })
       .catch(function (err) {
-        /* Network error / timeout — try next mirror */
+        /* Network error / timeout — try next mirror (informational, not an error) */
         if (queue.length > 0) {
-          console.warn("Overpass error from " + endpoint + " (" + err.message + "), trying next...");
+          if (typeof Log !== "undefined") Log.info("Overpass " + endpoint + " niedostepny (" + err.message + ") — probuje nastepne lustro");
           return tryEndpoints(queue, ql);
         }
         return Promise.reject(err);
