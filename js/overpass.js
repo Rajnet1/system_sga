@@ -23,13 +23,13 @@
   var TTL_LIST = 7 * 86400 * 1000;   /* 7 days  */
   var PREFIX_FAC = "overpass_fac_v3_";
   var TTL_FAC = 24 * 3600 * 1000;    /* 24 hours */
-  var PREFIX_URBAN = "overpass_urban_v1_";
+  var PREFIX_URBAN = "overpass_urban_v2_";
   var TTL_URBAN = 24 * 3600 * 1000;  /* 24 hours */
   var PREFIX_PLACES = "overpass_places_v1_";
   var TTL_PLACES = 24 * 3600 * 1000; /* 24 hours */
   var PREFIX_BOUNDS = "overpass_bounds_v1_";
   var TTL_BOUNDS = 7 * 86400 * 1000; /* 7 days */
-  var PREFIX_GEOCODE = "geocode_v1_";
+  var PREFIX_GEOCODE = "geocode_v2_";
 
   /* -----------------------------------------------------------------------
    * Public helpers
@@ -274,9 +274,9 @@
         '["name"~"' + nameRegex + '",i]->.p;' +
       ".p map_to_area -> .a;" +
       "(" +
-      '  node["place"~"city|town"](area.a);' +
-      '  way["place"~"city|town"](area.a);' +
-      '  rel["place"~"city|town"](area.a);' +
+      '  node["place"~"city|town|village"](area.a);' +
+      '  way["place"~"city|town|village"](area.a);' +
+      '  rel["place"~"city|town|village"](area.a);' +
       ");" +
       "out center tags;";
 
